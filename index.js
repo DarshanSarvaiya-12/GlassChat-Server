@@ -579,7 +579,19 @@ async function getGeminiReply(history, systemPrompt) {
     return "Sorry, thodi var pachi try karo! 🙏";
   }
 }
+// DETECT PRODUCT CODES IN MESSAGE
+function detectProductCodes(text) {
+  const upperText = text.toUpperCase();
+  const foundCodes = [];
 
+  for (const code in products) {
+    if (upperText.includes(code)) {
+      foundCodes.push(code);
+    }
+  }
+
+  return foundCodes;
+}
 // DELAY HELPER
 function delay(ms) {
   return new Promise(
