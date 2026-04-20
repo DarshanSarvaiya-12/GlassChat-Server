@@ -10,6 +10,10 @@ app.use(express.json());
 // Connect MongoDB
 connectDB();
 
+// Duplicate message protection
+// Stores last processed message ID per phone
+const recentMessages = new Map();
+
 // Health check
 app.get('/', (req, res) => {
   res.status(200).send('GlassChat server is running!');
@@ -20,7 +24,7 @@ app.get('/webhook', (req, res) => {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
-  if (mode === 'subscribe' && 
+  if (mode === 'subscribe' &&
       token === process.env.VERIFY_TOKEN) {
     console.log('Webhook verified!');
     res.status(200).send(challenge);
@@ -39,39 +43,50 @@ app.post('/webhook', async (req, res) => {
 
     if (!message) return res.sendStatus(200);
 
+    // DUPLICATE MESSAGE PROTECTION
+    const messageId = message.id;
+    if (recentMessages.has(messageId)) {
+      console.log('Duplicate message ignored:', messageId);
+      return res.sendStatus(200);
+    }
+    recentMessages.set(messageId, Date.now());
+
+    // Clean old entries from map after 10 seconds
+    setTimeout(() => {
+      recentMessages.delete(messageId);
+    }, 10000);
+
     const userPhone = message.from;
     const messageType = message.type;
 
-    // Get or create customer from MongoDB
+    // Get or create customer
     let customer = await getOrCreateCustomer(userPhone);
+    if (!customer) return res.sendStatus(200);
 
     // BUTTON TAP HANDLER
     if (messageType === 'interactive') {
-      const buttonId = 
+      const buttonId =
         message.interactive?.button_reply?.id;
-      console.log(`Button: ${buttonId}`);
+      console.log(`Button: ${buttonId} from ${userPhone}`);
 
       if (buttonId === 'view_collection') {
-        await updateCustomerStage(
-          userPhone, 'browsing'
-        );
+        await updateCustomerStage(userPhone, 'browsing');
         await sendAllProductImages(userPhone);
 
       } else if (buttonId === 'todays_offers') {
         await sendTextMessage(userPhone,
-          "🔥 *Aaj na Special Offers!*\n\n" +
-          "✅ Buy 2 = 10% OFF\n" +
-          "✅ Buy 3 = 20% OFF\n" +
-          "✅ Free delivery above ₹999\n\n" +
-          "Collection jova maate 👇"
+          "*Today's Special Offers*\n\n" +
+          "- Buy 2 shirts = 10% OFF\n" +
+          "- Buy 3 shirts = 20% OFF\n" +
+          "- Free delivery on orders above ₹999\n\n" +
+          "Check out our collection below!"
         );
         await sendWelcomeButtons(userPhone);
 
       } else if (buttonId === 'talk_agent') {
         await sendTextMessage(userPhone,
-          "👤 *Agent Support*\n\n" +
-          "Amaro agent 9AM-6PM available che.\n\n" +
-          "Tyaa sudhi collection joi shakho! 👇"
+          "Our agent is available 9AM - 6PM.\n\n" +
+          "Meanwhile, feel free to browse our collection!"
         );
         await sendWelcomeButtons(userPhone);
       }
@@ -83,19 +98,19 @@ app.post('/webhook', async (req, res) => {
       const userText = message.text.body.trim();
       console.log(`${userPhone}: ${userText}`);
 
-      // NEW CUSTOMER
+      // NEW CUSTOMER - show welcome buttons
       if (customer.session.stage === 'new') {
         await sendWelcomeButtons(userPhone);
         return res.sendStatus(200);
       }
 
       // DETECT PRODUCT CODES
-      const detectedCodes = detectProductCodes(
-        userText
-      );
+      const detectedCodes = detectProductCodes(userText);
 
-      if (detectedCodes.length > 0 && 
-          customer.session.stage === 'browsing') {
+      if (
+        detectedCodes.length > 0 &&
+        customer.session.stage === 'browsing'
+      ) {
         // Save selected products to DB
         await updateCustomerSession(userPhone, {
           'session.stage': 'confirmed',
@@ -103,13 +118,13 @@ app.post('/webhook', async (req, res) => {
             code: code,
             name: products[code].name,
             color: products[code].color,
-            pricePerItem: products[code].price,
+            pricePerItem: products[code].price
           }))
         });
 
         // Refresh customer data
-        customer = await Customer.findOne({ 
-          phone: userPhone 
+        customer = await Customer.findOne({
+          phone: userPhone
         });
 
         // Send order summary
@@ -118,128 +133,146 @@ app.post('/webhook', async (req, res) => {
       }
 
       // GEMINI HANDLES CONVERSATION
-      customer = await Customer.findOne({ 
-        phone: userPhone 
+      // Refresh customer to get latest data
+      customer = await Customer.findOne({
+        phone: userPhone
       });
-      
-      const customerContext = 
-        buildCustomerContext(customer);
 
-      const systemPrompt = 
-`You are Priya, friendly sales assistant for 
-${process.env.BUSINESS_NAME} in 
-${process.env.BUSINESS_CITY}.
+      // Build context for Gemini
+      const customerContext = buildCustomerContext(customer);
 
-CUSTOMER DATA:
+      // Build system prompt
+      const systemPrompt =
+`You are Niya, a friendly sales assistant for ${process.env.BUSINESS_NAME || 'Ashirwad Apparels'} in ${process.env.BUSINESS_CITY || 'Ahmedabad'}.
+
+CUSTOMER INFO:
 ${customerContext}
 
 YOUR PERSONALITY:
-- Friendly and professional
-- Speak Gujarati + English mixed
-- Use emojis naturally
-- Keep messages short
-- Never say you are AI
-- One question at a time
+- Talk like a helpful friend, not a robot
+- Keep replies short and simple
+- Use simple English by default
+- If customer writes in Gujarati or Hindi, reply in that language simply
+- Never say you are an AI
+- Ask only one question at a time
+- Use emojis only when needed, not in every line
+- If reply needs to be long, use clear line breaks and points
 
-YOUR JOB - Follow steps strictly:
-Step 1: Customer selects products ✅ (done)
-Step 2: Confirm selection - ask 
-        "TS02 Red T-Shirt leva che ne?" 
-        Wait for YES before moving forward
-Step 3: After YES - Ask size for each product
-        "Kon sa size joie? S/M/L/XL/XXL"
-        Save size immediately when given
+YOUR SALES STEPS - follow in order:
+Step 1: Products already selected (check cart above)
+Step 2: Confirm selection
+  - Ask: "You want [product name]? Confirm?"
+  - Wait for YES before moving forward
+Step 3: Ask size for each product
+  - Ask: "What size do you need? S / M / L / XL / XXL"
+  - Save size when given
 Step 4: Ask quantity
-        "Ketla joie che?"
-        Save quantity immediately
+  - Ask: "How many pieces do you need?"
+  - Save quantity when given
 Step 5: Ask full name
-        "Tamaru full name shun che?"
-        Save name immediately
+  - Ask: "What is your full name?"
+  - Save name when given
 Step 6: Ask delivery address
-        "Delivery address apo please"
-        Save address immediately  
-Step 7: Show complete order summary:
-        Name: [name]
-        Contact: [phone]
-        Products: [list]
-        Sizes: [sizes]
-        Colors: [colors]
-        Price: [breakdown]
-        Address: [address]
-        Total: ₹[amount]
+  - Ask: "Please share your delivery address."
+  - Save address when given
+Step 7: Show full order summary in this format:
+  *Order Summary*
+  Name: [name]
+  Phone: [phone]
+  Product: [name + color]
+  Size: [size]
+  Qty: [qty]
+  Price: ₹[price] x [qty] = ₹[total]
+  Delivery: ₹[charge]
+  *Total: ₹[grand total]*
+  Address: [address]
 Step 8: Send payment details:
-        "GPay/PhonePe: 9998887776
-        Amount: ₹[total]
-        Payment karya pachi 
-        screenshot moklo!"
-Step 9: After payment screenshot received
-        Confirm order with ID
+  Pay via GPay / PhonePe: *9998887776*
+  Amount: ₹[total]
+  After payment, please send the screenshot.
+Step 9: After screenshot received
+  - Confirm order with a simple order ID
 
-IMPORTANT:
-- After customer gives name → 
-  say "updateName:[name]" at END of reply
-- After size confirmed → 
-  say "updateSize:[code]:[size]" 
-  at END of reply
-- After quantity confirmed → 
-  say "updateQty:[code]:[qty]" 
-  at END of reply  
-- After address confirmed → 
-  say "updateAddress:[address]" 
-  at END of reply
-- These tags help save data to database
-- Customer won't see these tags
+LANGUAGE RULES:
+- Default is simple English
+- If customer writes Gujarati → reply in simple Gujarati
+- If customer writes Hindi → reply in simple Hindi
+- If customer writes mixed → match their mix
+- Always understand poor spelling or grammar, focus on intent
 
-PRODUCTS: ${JSON.stringify(products)}
-OFFERS: Buy 2=10% off, Buy 3=20% off
-DELIVERY: ₹99 below ₹999, FREE above ₹999`;
+IMPORTANT DATA TAGS - add at END of reply, customer won't see these:
+- When customer gives name → add: updateName:[name]
+- When size confirmed → add: updateSize:[code]:[size]
+- When quantity confirmed → add: updateQty:[code]:[qty]
+- When address confirmed → add: updateAddress:[address]
 
-      // Build conversation history
-      // Fetch last 10 messages only
-      const recentHistory = 
+PRODUCTS AVAILABLE:
+${JSON.stringify(products, null, 2)}
+
+OFFERS:
+- Buy 2 = 10% off
+- Buy 3 = 20% off
+- Delivery ₹99 on orders below ₹999
+- Free delivery on orders ₹999 and above
+
+IMPORTANT RULES:
+- Stay focused on selling, ignore off-topic questions politely
+- If customer seems confused, simplify your reply
+- Never repeat the same question twice in a row
+- Never send more than one question in one message`;
+
+      // LOAD CONVERSATION HISTORY FROM DB
+      const savedHistory =
         customer.conversationHistory || [];
 
-      recentHistory.push({
+      // Take last 25 messages only
+      const historyToUse = savedHistory.slice(-25);
+
+      // Add current user message
+      historyToUse.push({
         role: 'user',
         parts: [{ text: userText }]
       });
 
+      // GET GEMINI REPLY
       const aiReply = await getGeminiReply(
-        recentHistory,
+        historyToUse,
         systemPrompt
       );
 
-      // Parse and save data tags from AI reply
+      // PARSE AND SAVE DATA TAGS
       await parseAndSaveAIData(
-        userPhone, 
-        aiReply, 
+        userPhone,
+        aiReply,
         customer
       );
 
-      // Clean reply before sending
+      // CLEAN REPLY - remove data tags before sending
       const cleanReply = aiReply
         .replace(/update\w+:[^\n]*/gi, '')
         .trim();
 
-      // Save conversation turn to DB
-      recentHistory.push({
-        role: 'model',
-        parts: [{ text: cleanReply }]
-      });
+      // SAVE BOTH MESSAGES TO DB
+      const updatedHistory = [
+        ...savedHistory,
+        { role: 'user', parts: [{ text: userText }] },
+        { role: 'model', parts: [{ text: cleanReply }] }
+      ];
 
-      // Keep only last 10 exchanges (20 messages)
-      const trimmedHistory = recentHistory.slice(-20);
+      // Keep only last 25 messages in DB
+      const trimmedHistory = updatedHistory.slice(-25);
 
       await updateCustomerSession(userPhone, {
-        'session.conversationHistory': trimmedHistory
+        conversationHistory: trimmedHistory
       });
 
+      // SEND REPLY TO CUSTOMER
       await sendTextMessage(userPhone, cleanReply);
     }
 
     res.sendStatus(200);
   } catch (error) {
-    console.error('Error:', error.message);
+    console.error('Webhook error:', error.message);
     res.sendStatus(200);
   }
 });
@@ -259,12 +292,12 @@ async function getOrCreateCustomer(phone) {
     } else {
       await Customer.findOneAndUpdate(
         { phone },
-        { 
+        {
           $inc: { totalVisits: 1 },
           $set: { lastVisit: new Date() }
         }
       );
-      console.log(`Returning: ${phone}`);
+      console.log(`Returning customer: ${phone}`);
     }
     return customer;
   } catch (error) {
@@ -278,10 +311,10 @@ function buildCustomerContext(customer) {
   let context = '';
 
   if (customer.totalVisits > 1) {
-    context += `RETURNING CUSTOMER\n`;
-    context += `Visits: ${customer.totalVisits}\n`;
+    context += `Type: Returning customer\n`;
+    context += `Total visits: ${customer.totalVisits}\n`;
   } else {
-    context += `NEW CUSTOMER\n`;
+    context += `Type: New customer\n`;
   }
 
   if (customer.name) {
@@ -292,15 +325,12 @@ function buildCustomerContext(customer) {
   context += `Stage: ${customer.session.stage}\n`;
 
   if (customer.session.cart?.length > 0) {
-    context += `\nCURRENT CART:\n`;
+    context += `\nCart:\n`;
     customer.session.cart.forEach(item => {
-      context += `- ${item.code}: ${item.name}`;
-      context += ` ${item.color}`;
-      if (item.size) context += ` Size:${item.size}`;
-      if (item.quantity) {
-        context += ` Qty:${item.quantity}`;
-      }
-      context += ` ₹${item.pricePerItem}\n`;
+      context += `- ${item.code}: ${item.name} ${item.color}`;
+      if (item.size) context += ` | Size: ${item.size}`;
+      if (item.quantity) context += ` | Qty: ${item.quantity}`;
+      context += ` | ₹${item.pricePerItem}\n`;
     });
   }
 
@@ -308,12 +338,14 @@ function buildCustomerContext(customer) {
     context += `Address: ${customer.session.deliveryAddress}\n`;
   }
 
+  if (customer.session.grandTotal > 0) {
+    context += `Order total: ₹${customer.session.grandTotal}\n`;
+  }
+
   if (customer.orders?.length > 0) {
-    context += `\nPREVIOUS ORDERS: `;
-    context += `${customer.orders.length} orders\n`;
-    const lastOrder = customer.orders[
-      customer.orders.length - 1
-    ];
+    context += `\nPrevious orders: ${customer.orders.length}\n`;
+    const lastOrder =
+      customer.orders[customer.orders.length - 1];
     context += `Last order: ₹${lastOrder.grandTotal}`;
     context += ` - ${lastOrder.deliveryStatus}\n`;
   }
@@ -322,28 +354,22 @@ function buildCustomerContext(customer) {
 }
 
 // PARSE AI REPLY AND SAVE DATA TAGS
-async function parseAndSaveAIData(
-  phone, reply, customer
-) {
+async function parseAndSaveAIData(phone, reply, customer) {
   try {
     const updates = {};
 
     // Extract name
-    const nameMatch = reply.match(
-      /updateName:([^\n]+)/i
-    );
+    const nameMatch = reply.match(/updateName:([^\n]+)/i);
     if (nameMatch) {
       updates.name = nameMatch[1].trim();
-      updates['session.stage'] = 'address';
+      updates['session.stage'] = 'sizing';
     }
 
     // Extract size
-    const sizeMatch = reply.match(
-      /updateSize:(\w+):(\w+)/i
-    );
+    const sizeMatch = reply.match(/updateSize:(\w+):(\w+)/i);
     if (sizeMatch) {
-      const code = sizeMatch[1];
-      const size = sizeMatch[2];
+      const code = sizeMatch[1].toUpperCase();
+      const size = sizeMatch[2].toUpperCase();
       const cart = customer.session.cart.map(item => {
         if (item.code === code) item.size = size;
         return item;
@@ -353,11 +379,9 @@ async function parseAndSaveAIData(
     }
 
     // Extract quantity
-    const qtyMatch = reply.match(
-      /updateQty:(\w+):(\d+)/i
-    );
+    const qtyMatch = reply.match(/updateQty:(\w+):(\d+)/i);
     if (qtyMatch) {
-      const code = qtyMatch[1];
+      const code = qtyMatch[1].toUpperCase();
       const qty = parseInt(qtyMatch[2]);
       const cart = customer.session.cart.map(item => {
         if (item.code === code) {
@@ -367,10 +391,21 @@ async function parseAndSaveAIData(
         return item;
       });
 
-      // Calculate totals
-      const orderTotal = cart.reduce(
+      // Calculate totals with discount
+      let orderTotal = cart.reduce(
         (sum, item) => sum + (item.totalPrice || 0), 0
       );
+      const totalItems = cart.reduce(
+        (sum, item) => sum + (item.quantity || 0), 0
+      );
+
+      // Apply offers
+      if (totalItems >= 3) {
+        orderTotal = Math.round(orderTotal * 0.8);
+      } else if (totalItems >= 2) {
+        orderTotal = Math.round(orderTotal * 0.9);
+      }
+
       const deliveryCharge = orderTotal >= 999 ? 0 : 99;
       const grandTotal = orderTotal + deliveryCharge;
 
@@ -386,14 +421,14 @@ async function parseAndSaveAIData(
       /updateAddress:([^\n]+)/i
     );
     if (addressMatch) {
-      updates['session.deliveryAddress'] = 
+      updates['session.deliveryAddress'] =
         addressMatch[1].trim();
       updates['session.stage'] = 'payment';
     }
 
     if (Object.keys(updates).length > 0) {
       await updateCustomerSession(phone, updates);
-      console.log(`Saved to DB:`, updates);
+      console.log(`DB updated:`, Object.keys(updates));
     }
   } catch (error) {
     console.error('Parse error:', error.message);
@@ -423,91 +458,95 @@ async function updateCustomerStage(phone, stage) {
 // SEND ORDER SUMMARY
 async function sendOrderSummary(phone, customer) {
   const cart = customer.session.cart;
-  let summary = "🛒 *Tamari Selection Confirm Karo:*\n\n";
+  let summary = '*Your Selection*\n\n';
 
   cart.forEach(item => {
-    summary += `✅ ${item.name}\n`;
-    summary += `   Color: ${item.color}\n`;
-    summary += `   Price: ₹${item.pricePerItem}\n\n`;
+    summary += `- ${item.name} (${item.color})\n`;
+    summary += `  Code: ${item.code} | ₹${item.pricePerItem}\n\n`;
   });
 
-  summary += `Aa selection sahi che ne? (Yes/No)`;
+  summary += `Is this correct? Reply *Yes* to confirm.`;
   await sendTextMessage(phone, summary);
 }
 
 // SEND WELCOME BUTTONS
 async function sendWelcomeButtons(to) {
-  await axios.post(
-    `https://graph.facebook.com/v18.0/${process.env.PHONE_NUMBER_ID}/messages`,
-    {
-      messaging_product: 'whatsapp',
-      to: to,
-      type: 'interactive',
-      interactive: {
-        type: 'button',
-        body: {
-          text: `Welcome to ${process.env.BUSINESS_NAME}! 👕\n\nGujarat ni best quality t-shirts\nSurat thi direct factory price! 🔥`
-        },
-        action: {
-          buttons: [
-            {
-              type: 'reply',
-              reply: {
-                id: 'view_collection',
-                title: '🛍️ View Collection'
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v18.0/${process.env.PHONE_NUMBER_ID}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        to: to,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: {
+            text:
+              `Welcome to ${process.env.BUSINESS_NAME || 'Ashirwad Apparels'}!\n\n` +
+              `Quality t-shirts at factory prices.\n` +
+              `What would you like to do?`
+          },
+          action: {
+            buttons: [
+              {
+                type: 'reply',
+                reply: {
+                  id: 'view_collection',
+                  title: 'View Collection'
+                }
+              },
+              {
+                type: 'reply',
+                reply: {
+                  id: 'todays_offers',
+                  title: "Today's Offers"
+                }
+              },
+              {
+                type: 'reply',
+                reply: {
+                  id: 'talk_agent',
+                  title: 'Talk to Agent'
+                }
               }
-            },
-            {
-              type: 'reply',
-              reply: {
-                id: 'todays_offers',
-                title: '💰 Today\'s Offers'
-              }
-            },
-            {
-              type: 'reply',
-              reply: {
-                id: 'talk_agent',
-                title: '📞 Talk to Agent'
-              }
-            }
-          ]
+            ]
+          }
+        }
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          'Content-Type': 'application/json'
         }
       }
-    },
-    {
-      headers: {
-        Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
-        'Content-Type': 'application/json'
-      }
-    }
-  );
+    );
+  } catch (error) {
+    console.error('Welcome button error:', error.message);
+  }
 }
 
 // SEND ALL PRODUCT IMAGES
 async function sendAllProductImages(to) {
   await sendTextMessage(to,
-    "👕 *Amari T-Shirt Collection*\n\n" +
-    "Badhi images juo ane pasand aave " +
-    "te no *code* moklo!\n\nExample: *TS01 TS03*"
+    '*Our T-Shirt Collection*\n\n' +
+    'Check all images below.\n' +
+    'Send the *code* of the shirt you like.\n\n' +
+    'Example: *TS01* or *TS01 TS03*'
   );
 
   for (const code in products) {
     const product = products[code];
     await sendImageMessage(
-      to, 
-      product.image_url, 
+      to,
+      product.image_url,
       product.caption
     );
     await delay(500);
   }
 
   await sendTextMessage(to,
-    "⬆️ Collection joi lidhu?\n\n" +
-    "Hava *product code* moklo!\n" +
-    "Example: *TS01* ya *TS01 TS03*\n\n" +
-    "Amaro AI assistant thamari " +
-    "madad karse! 😊"
+    'Liked something? Just send the product code!\n' +
+    'Example: *TS02* or *TS01 TS04*'
   );
 }
 
@@ -530,7 +569,7 @@ async function sendTextMessage(to, text) {
       }
     );
   } catch (error) {
-    console.error('Send error:', error.message);
+    console.error('Send text error:', error.message);
   }
 }
 
@@ -556,7 +595,7 @@ async function sendImageMessage(to, imageUrl, caption) {
       }
     );
   } catch (error) {
-    console.error('Image error:', error.message);
+    console.error('Send image error:', error.message);
   }
 }
 
@@ -569,16 +608,21 @@ async function getGeminiReply(history, systemPrompt) {
         system_instruction: {
           parts: [{ text: systemPrompt }]
         },
-        contents: history
+        contents: history,
+        generationConfig: {
+          temperature: 0.7,
+          maxOutputTokens: 500
+        }
       }
     );
     return response.data.candidates[0]
       .content.parts[0].text;
   } catch (error) {
     console.error('Gemini error:', error.message);
-    return "Sorry, thodi var pachi try karo! 🙏";
+    return "Sorry, something went wrong. Please try again in a moment.";
   }
 }
+
 // DETECT PRODUCT CODES IN MESSAGE
 function detectProductCodes(text) {
   const upperText = text.toUpperCase();
@@ -592,6 +636,7 @@ function detectProductCodes(text) {
 
   return foundCodes;
 }
+
 // DELAY HELPER
 function delay(ms) {
   return new Promise(
