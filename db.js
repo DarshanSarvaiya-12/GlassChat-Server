@@ -9,9 +9,8 @@ const connectDB = async () => {
   }
 };
 
-// 7 day expiry session schema
 const customerSchema = new mongoose.Schema({
-  
+
   // IDENTITY
   phone: {
     type: String,
@@ -26,7 +25,14 @@ const customerSchema = new mongoose.Schema({
     type: String,
     default: null
   },
-  
+
+  // CONVERSATION HISTORY - lives outside session
+  // so it never gets wiped by session expiry
+  conversationHistory: {
+    type: Array,
+    default: []
+  },
+
   // CURRENT SESSION - 7 day realtime data
   session: {
     stage: {
@@ -68,10 +74,6 @@ const customerSchema = new mongoose.Schema({
       type: Number,
       default: 0
     },
-    conversationHistory: {
-  type: Array,
-  default: []
-},
     // AUTO EXPIRE after 7 days
     expiresAt: {
       type: Date,
@@ -81,7 +83,7 @@ const customerSchema = new mongoose.Schema({
       index: { expires: 0 }
     }
   },
-  
+
   // ORDER HISTORY
   orders: [{
     orderId: String,
@@ -116,7 +118,7 @@ const customerSchema = new mongoose.Schema({
       default: 'pending'
     }
   }],
-  
+
   // VISIT TRACKING
   firstVisit: {
     type: Date,
@@ -130,13 +132,13 @@ const customerSchema = new mongoose.Schema({
     type: Number,
     default: 1
   },
-  
+
   // PREFERENCES
   preferences: {
     sizes: { type: Object, default: {} },
     colors: { type: [String], default: [] }
   }
-  
+
 });
 
 const Customer = mongoose.model(
