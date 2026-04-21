@@ -617,24 +617,38 @@ async function sendImageMessage(to, imageUrl, caption) {
 // GROQ AI
 async function getGeminiReply(history, systemPrompt) {
   try {
-    // Convert history format
-    // Gemini uses parts[] but Groq uses content
-    const messages = history.map(msg => ({
-      role: msg.role === 'model' ? 'assistant' : 'user',
-      content: msg.parts[0].text
-    }));
+    // Convert and clean history format
+    const messages = [];
+
+    // Add system prompt first
+    messages.push({
+      role: 'system',
+      content: systemPrompt
+    });
+
+    // Convert history safely
+    history.forEach(msg => {
+      // Skip empty messages
+      if (!msg || !msg.parts || !msg.parts[0]) return;
+      const text = msg.parts[0].text;
+      if (!text || text.trim() === '') return;
+
+      messages.push({
+        role: msg.role === 'model' 
+          ? 'assistant' 
+          : 'user',
+        content: text
+      });
+    });
+
+    console.log('Sending to Groq:', 
+      messages.length, 'messages');
 
     const response = await axios.post(
       'https://api.groq.com/openai/v1/chat/completions',
       {
         model: 'llama3-8b-8192',
-        messages: [
-          {
-            role: 'system',
-            content: systemPrompt
-          },
-          ...messages
-        ],
+        messages: messages,
         max_tokens: 500,
         temperature: 0.7
       },
@@ -648,8 +662,13 @@ async function getGeminiReply(history, systemPrompt) {
 
     return response.data.choices[0]
       .message.content;
+
   } catch (error) {
     console.error('Groq error:', error.message);
+    if (error.response) {
+      console.error('Groq details:', 
+        JSON.stringify(error.response.data));
+    }
     return "Sorry, please try again in a moment!";
   }
 }
