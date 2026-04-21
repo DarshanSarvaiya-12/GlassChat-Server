@@ -255,5 +255,4 @@ module.exports = {
   Settings,
   getSettings
 };
-
-module.exports = { connectDB, Customer };
+module.exports = { connectDB, Customer, Settings, getSettings };
