@@ -614,22 +614,42 @@ async function sendImageMessage(to, imageUrl, caption) {
   }
 }
 
-// GEMINI AI
+// GROQ AI
 async function getGeminiReply(history, systemPrompt) {
   try {
+    // Convert history format
+    // Gemini uses parts[] but Groq uses content
+    const messages = history.map(msg => ({
+      role: msg.role === 'model' ? 'assistant' : 'user',
+      content: msg.parts[0].text
+    }));
+
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      'https://api.groq.com/openai/v1/chat/completions',
       {
-        system_instruction: {
-          parts: [{ text: systemPrompt }]
-        },
-        contents: history
+        model: 'llama3-8b-8192',
+        messages: [
+          {
+            role: 'system',
+            content: systemPrompt
+          },
+          ...messages
+        ],
+        max_tokens: 500,
+        temperature: 0.7
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
       }
     );
-    return response.data.candidates[0]
-      .content.parts[0].text;
+
+    return response.data.choices[0]
+      .message.content;
   } catch (error) {
-    console.error('Gemini error:', error.message);
+    console.error('Groq error:', error.message);
     return "Sorry, please try again in a moment!";
   }
 }
