@@ -1,5 +1,6 @@
 const mongoose = require('mongoose');
 
+// Connect to MongoDB
 const connectDB = async () => {
   try {
     await mongoose.connect(process.env.MONGODB_URI);
@@ -9,6 +10,7 @@ const connectDB = async () => {
   }
 };
 
+// Customer Schema
 const customerSchema = new mongoose.Schema({
 
   // IDENTITY
@@ -26,14 +28,7 @@ const customerSchema = new mongoose.Schema({
     default: null
   },
 
-  // CONVERSATION HISTORY - lives outside session
-  // so it never gets wiped by session expiry
-  conversationHistory: {
-    type: Array,
-    default: []
-  },
-
-  // CURRENT SESSION - 7 day realtime data
+  // CURRENT SESSION
   session: {
     stage: {
       type: String,
@@ -49,19 +44,34 @@ const customerSchema = new mongoose.Schema({
       ],
       default: 'new'
     },
+
+    // CART ITEMS
     cart: [{
       code: String,
       name: String,
       color: String,
-      size: String,
-      quantity: { type: Number, default: 1 },
+      size: {
+        type: String,
+        default: null
+      },
+      quantity: {
+        type: Number,
+        default: 1
+      },
       pricePerItem: Number,
-      totalPrice: Number
+      totalPrice: {
+        type: Number,
+        default: 0
+      }
     }],
+
+    // DELIVERY INFO
     deliveryAddress: {
       type: String,
       default: null
     },
+
+    // PRICE SUMMARY
     orderTotal: {
       type: Number,
       default: 0
@@ -74,6 +84,14 @@ const customerSchema = new mongoose.Schema({
       type: Number,
       default: 0
     },
+
+    // CONVERSATION HISTORY
+    // Last 20 messages only
+    conversationHistory: {
+      type: Array,
+      default: []
+    },
+
     // AUTO EXPIRE after 7 days
     expiresAt: {
       type: Date,
@@ -86,7 +104,10 @@ const customerSchema = new mongoose.Schema({
 
   // ORDER HISTORY
   orders: [{
-    orderId: String,
+    orderId: {
+      type: String,
+      default: () => 'ORD-' + Date.now()
+    },
     date: {
       type: Date,
       default: Date.now
@@ -101,6 +122,8 @@ const customerSchema = new mongoose.Schema({
       totalPrice: Number
     }],
     deliveryAddress: String,
+    orderTotal: Number,
+    deliveryCharge: Number,
     grandTotal: Number,
     paymentStatus: {
       type: String,
@@ -134,9 +157,16 @@ const customerSchema = new mongoose.Schema({
   },
 
   // PREFERENCES
+  // Learned automatically over time
   preferences: {
-    sizes: { type: Object, default: {} },
-    colors: { type: [String], default: [] }
+    sizes: {
+      type: Object,
+      default: {}
+    },
+    colors: {
+      type: [String],
+      default: []
+    }
   }
 
 });
