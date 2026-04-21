@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const products = require('./products');
-const { connectDB, Customer, Settings, getSettings } = require('./db');
+const { connectDB, Customer } = require('./db');
 
 const app = express();
 app.use(express.json());
@@ -29,139 +29,7 @@ app.get('/webhook', (req, res) => {
   }
 });
 
-// ─────────────────────────────────────
-// SETTINGS API FOR WEBSITE
-// ─────────────────────────────────────
-
-// Get all settings
-app.get('/settings', async (req, res) => {
-  try {
-    const settings = await getSettings();
-    res.json(settings);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Update business info
-app.post('/settings/business', async (req, res) => {
-  try {
-    const { businessName, businessCity } = req.body;
-    await Settings.findOneAndUpdate(
-      { singleton: 'main' },
-      { $set: { businessName, businessCity } },
-      { new: true }
-    );
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Update system prompt
-app.post('/settings/prompt', async (req, res) => {
-  try {
-    const { systemPrompt } = req.body;
-    await Settings.findOneAndUpdate(
-      { singleton: 'main' },
-      { $set: { systemPrompt } },
-      { new: true }
-    );
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Update shipping
-app.post('/settings/shipping', async (req, res) => {
-  try {
-    const {
-      freeShipping,
-      freeShippingAbove,
-      shippingCharge
-    } = req.body;
-    await Settings.findOneAndUpdate(
-      { singleton: 'main' },
-      {
-        $set: {
-          freeShipping,
-          freeShippingAbove,
-          shippingCharge
-        }
-      },
-      { new: true }
-    );
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Add offer
-app.post('/settings/offers/add', async (req, res) => {
-  try {
-    const { title, description } = req.body;
-    await Settings.findOneAndUpdate(
-      { singleton: 'main' },
-      {
-        $push: {
-          offers: { title, description, active: true }
-        }
-      },
-      { new: true }
-    );
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Update offer
-app.post('/settings/offers/update', async (req, res) => {
-  try {
-    const { offerId, title, description, active } = req.body;
-    await Settings.findOneAndUpdate(
-      {
-        singleton: 'main',
-        'offers._id': offerId
-      },
-      {
-        $set: {
-          'offers.$.title': title,
-          'offers.$.description': description,
-          'offers.$.active': active
-        }
-      }
-    );
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Delete offer
-app.post('/settings/offers/delete', async (req, res) => {
-  try {
-    const { offerId } = req.body;
-    await Settings.findOneAndUpdate(
-      { singleton: 'main' },
-      {
-        $pull: {
-          offers: { _id: offerId }
-        }
-      }
-    );
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ─────────────────────────────────────
-// WHATSAPP WEBHOOK
-// ─────────────────────────────────────
-
+// RECEIVE ALL MESSAGES
 app.post('/webhook', async (req, res) => {
   try {
     const entry = req.body.entry?.[0];
@@ -174,11 +42,9 @@ app.post('/webhook', async (req, res) => {
     const userPhone = message.from;
     const messageType = message.type;
 
-    // Get settings from DB
-    const settings = await getSettings();
-
-    // Get or create customer
+    // Get or create customer from MongoDB
     let customer = await getOrCreateCustomer(userPhone);
+
     if (!customer) return res.sendStatus(200);
 
     // BUTTON TAP HANDLER
@@ -194,34 +60,22 @@ app.post('/webhook', async (req, res) => {
         await sendAllProductImages(userPhone);
 
       } else if (buttonId === 'todays_offers') {
-        // Build offers from DB
-        const activeOffers = settings.offers.filter(
-          o => o.active
+        await sendTextMessage(userPhone,
+          "🔥 *Today's Special Offers!*\n\n" +
+          "✅ Buy 2 = 10% OFF\n" +
+          "✅ Buy 3 = 20% OFF\n" +
+          "✅ Free delivery above 999 rupees\n\n" +
+          "Tap below to view our collection!"
         );
-        let offersText = "🔥 *Today's Special Offers!*\n\n";
-        if (activeOffers.length > 0) {
-          activeOffers.forEach(offer => {
-            offersText += `✅ ${offer.title}\n`;
-            offersText += `${offer.description}\n\n`;
-          });
-        } else {
-          offersText +=
-            "✅ Buy 2 = 10% OFF\n" +
-            "✅ Buy 3 = 20% OFF\n" +
-            "✅ Free delivery above " +
-            `${settings.freeShippingAbove} rupees\n\n`;
-        }
-        offersText += "Tap below to view collection!";
-        await sendTextMessage(userPhone, offersText);
-        await sendWelcomeButtons(userPhone, settings);
+        await sendWelcomeButtons(userPhone);
 
       } else if (buttonId === 'talk_agent') {
         await sendTextMessage(userPhone,
           "👤 *Agent Support*\n\n" +
           "Our agent is available 9AM to 6PM.\n\n" +
-          "Meanwhile view our collection!"
+          "Meanwhile you can view our collection!"
         );
-        await sendWelcomeButtons(userPhone, settings);
+        await sendWelcomeButtons(userPhone);
       }
       return res.sendStatus(200);
     }
@@ -233,7 +87,16 @@ app.post('/webhook', async (req, res) => {
 
       // NEW CUSTOMER
       if (customer.session.stage === 'new') {
-        await sendWelcomeButtons(userPhone, settings);
+        await sendWelcomeButtons(userPhone);
+        return res.sendStatus(200);
+      }
+
+      // DETECT COLLECTION REQUEST
+      if (isCollectionRequest(userText)) {
+        await updateCustomerStage(
+          userPhone, 'browsing'
+        );
+        await sendAllProductImages(userPhone);
         return res.sendStatus(200);
       }
 
@@ -242,6 +105,8 @@ app.post('/webhook', async (req, res) => {
 
       if (detectedCodes.length > 0 &&
         customer.session.stage === 'browsing') {
+
+        // Save selected products to DB
         await updateCustomerSession(userPhone, {
           'session.stage': 'confirmed',
           'session.cart': detectedCodes.map(code => ({
@@ -252,19 +117,17 @@ app.post('/webhook', async (req, res) => {
           }))
         });
 
+        // Refresh customer data
         customer = await Customer.findOne({
           phone: userPhone
         });
 
-        await sendOrderSummary(
-          userPhone,
-          customer,
-          settings
-        );
+        // Send order summary
+        await sendOrderSummary(userPhone, customer);
         return res.sendStatus(200);
       }
 
-      // GEMINI/GROQ HANDLES CONVERSATION
+      // GEMINI HANDLES CONVERSATION
       customer = await Customer.findOne({
         phone: userPhone
       });
@@ -272,36 +135,10 @@ app.post('/webhook', async (req, res) => {
       const customerContext =
         buildCustomerContext(customer);
 
-      // Build offers text for prompt
-      const activeOffers = settings.offers.filter(
-        o => o.active
-      );
-      let offersPromptText = '';
-      if (activeOffers.length > 0) {
-        activeOffers.forEach(offer => {
-          offersPromptText +=
-            `${offer.title}: ${offer.description}\n`;
-        });
-      } else {
-        offersPromptText =
-          'Buy 2 get 10 percent off\n' +
-          'Buy 3 get 20 percent off';
-      }
-
-      // Shipping text for prompt
-      const shippingText = settings.freeShipping
-        ? 'All orders have FREE shipping'
-        : `Free shipping above ${settings.freeShippingAbove} rupees. ` +
-          `Charge: ${settings.shippingCharge} rupees below that.`;
-
-      // Use custom prompt from DB or default
-      const customPrompt = settings.systemPrompt || '';
-
       const systemPrompt =
-`You are Alex, a friendly sales assistant for
-${settings.businessName} in ${settings.businessCity}.
-
-${customPrompt}
+`You are Alex, a friendly sales assistant for 
+${process.env.BUSINESS_NAME} in 
+${process.env.BUSINESS_CITY}.
 
 CUSTOMER DATA:
 ${customerContext}
@@ -313,14 +150,6 @@ YOUR PERSONALITY:
 - Keep messages short
 - Never say you are AI
 - Ask one question at a time
-- Never mention competitor shops
-
-IMPORTANT - PRODUCT PHOTOS:
-If customer asks to see products, photos,
-collection, images, or anything related to
-viewing products - reply with exactly this
-one word only on first line: SENDPHOTOS
-Then continue your message normally.
 
 YOUR JOB - Follow these steps strictly:
 Step 1: Customer selects products (already done)
@@ -329,53 +158,52 @@ Step 2: Confirm their selection warmly
         Wait for YES before moving forward
 Step 3: After YES - Ask size for each product
         "What size do you need? S/M/L/XL/XXL"
+        Save size immediately when customer gives it
 Step 4: Ask quantity
         "How many pieces do you need?"
+        Save quantity immediately
 Step 5: Ask full name
         "May I know your full name please?"
+        Save name immediately
 Step 6: Ask delivery address
         "Please share your delivery address"
-Step 7: Show complete order summary in this
-        exact format:
-
+        Save address immediately
+Step 7: Show complete order summary:
         Name: [name]
         Contact: [phone]
         Products: [list]
         Sizes: [sizes]
         Colors: [colors]
-
-        Each Price: [price per item x quantity]
-        Total Price: [total without delivery]
-
+        Price: [breakdown]
         Address: [address]
-
         Delivery: [charge]
-
         Total: [grand total]
-
 Step 8: Send payment details:
         "Please pay using GPay or PhonePe:
         Number: 9998887776
         Amount: [total]
         After payment please send screenshot!"
-Step 9: After payment screenshot confirm order:
-        "Order confirmed!
+Step 9: After customer sends payment screenshot
+        Confirm order with order ID
+        Example: "Order confirmed! 
         Your Order ID is ORD-XXXX
         Delivery in 3 to 5 days!"
 
 IMPORTANT TAGS:
-Add at END of reply. Customer will NOT see these.
+Add these at the END of your reply only.
+Customer will NOT see these tags.
 - After name given: updateName:[name]
 - After size confirmed: updateSize:[code]:[size]
 - After quantity confirmed: updateQty:[code]:[qty]
 - After address confirmed: updateAddress:[address]
 
 PRODUCTS: ${JSON.stringify(products)}
-OFFERS:
-${offersPromptText}
-SHIPPING: ${shippingText}`;
+OFFERS: Buy 2 get 10 percent off
+        Buy 3 get 20 percent off
+DELIVERY: 99 rupees below 999
+          FREE above 999 rupees`;
 
-      // Get conversation history
+      // Get conversation history from DB
       const recentHistory =
         customer.session.conversationHistory || [];
 
@@ -384,61 +212,31 @@ SHIPPING: ${shippingText}`;
         parts: [{ text: userText }]
       });
 
-      const aiReply = await getAIReply(
+      const aiReply = await getGeminiReply(
         recentHistory,
         systemPrompt
       );
 
-      // Check if AI wants to send photos
-      if (aiReply.startsWith('SENDPHOTOS')) {
-        await updateCustomerStage(
-          userPhone, 'browsing'
-        );
-        await sendAllProductImages(userPhone);
-
-        // Clean SENDPHOTOS from reply
-        const cleanedReply = aiReply
-          .replace('SENDPHOTOS', '')
-          .trim();
-
-        if (cleanedReply.length > 0) {
-          await sendTextMessage(userPhone, cleanedReply);
-        }
-
-        // Save to history
-        recentHistory.push({
-          role: 'model',
-          parts: [{ text: aiReply }]
-        });
-        const trimmedHistory =
-          recentHistory.slice(-50);
-        await updateCustomerSession(userPhone, {
-          'session.conversationHistory': trimmedHistory
-        });
-
-        return res.sendStatus(200);
-      }
-
-      // Parse and save data tags
+      // Parse and save data tags from AI reply
       await parseAndSaveAIData(
         userPhone,
         aiReply,
         customer
       );
 
-      // Clean reply
+      // Clean reply before sending to customer
       const cleanReply = aiReply
         .replace(/update\w+:[^\n]*/gi, '')
         .trim();
 
-      // Save conversation
+      // Save conversation to DB
       recentHistory.push({
         role: 'model',
         parts: [{ text: cleanReply }]
       });
 
-      // Keep last 50 messages = 25 exchanges
-      const trimmedHistory = recentHistory.slice(-50);
+      // Keep only last 20 messages
+      const trimmedHistory = recentHistory.slice(-20);
 
       await updateCustomerSession(userPhone, {
         'session.conversationHistory': trimmedHistory
@@ -454,14 +252,11 @@ SHIPPING: ${shippingText}`;
   }
 });
 
-// ─────────────────────────────────────
-// HELPER FUNCTIONS
-// ─────────────────────────────────────
-
 // GET OR CREATE CUSTOMER
 async function getOrCreateCustomer(phone) {
   try {
     let customer = await Customer.findOne({ phone });
+
     if (!customer) {
       customer = new Customer({
         phone,
@@ -486,7 +281,7 @@ async function getOrCreateCustomer(phone) {
   }
 }
 
-// BUILD CUSTOMER CONTEXT FOR AI
+// BUILD CUSTOMER CONTEXT FOR GEMINI
 function buildCustomerContext(customer) {
   let context = '';
 
@@ -543,6 +338,7 @@ async function parseAndSaveAIData(
   try {
     const updates = {};
 
+    // Extract name
     const nameMatch = reply.match(
       /updateName:([^\n]+)/i
     );
@@ -551,6 +347,7 @@ async function parseAndSaveAIData(
       updates['session.stage'] = 'address';
     }
 
+    // Extract size
     const sizeMatch = reply.match(
       /updateSize:(\w+):(\w+)/i
     );
@@ -565,13 +362,13 @@ async function parseAndSaveAIData(
       updates['session.stage'] = 'sizing';
     }
 
+    // Extract quantity
     const qtyMatch = reply.match(
       /updateQty:(\w+):(\d+)/i
     );
     if (qtyMatch) {
       const code = qtyMatch[1];
       const qty = parseInt(qtyMatch[2]);
-      const settings = await getSettings();
       const cart = customer.session.cart.map(item => {
         if (item.code === code) {
           item.quantity = qty;
@@ -583,14 +380,7 @@ async function parseAndSaveAIData(
       const orderTotal = cart.reduce(
         (sum, item) => sum + (item.totalPrice || 0), 0
       );
-
-      let deliveryCharge = settings.shippingCharge;
-      if (settings.freeShipping) {
-        deliveryCharge = 0;
-      } else if (orderTotal >= settings.freeShippingAbove) {
-        deliveryCharge = 0;
-      }
-
+      const deliveryCharge = orderTotal >= 999 ? 0 : 99;
       const grandTotal = orderTotal + deliveryCharge;
 
       updates['session.cart'] = cart;
@@ -600,6 +390,7 @@ async function parseAndSaveAIData(
       updates['session.stage'] = 'quantity';
     }
 
+    // Extract address
     const addressMatch = reply.match(
       /updateAddress:([^\n]+)/i
     );
@@ -638,6 +429,32 @@ async function updateCustomerStage(phone, stage) {
   });
 }
 
+// DETECT IF CUSTOMER WANTS TO SEE COLLECTION
+function isCollectionRequest(text) {
+  const lowerText = text.toLowerCase();
+
+  const keywords = [
+    'collection', 'products', 'photos',
+    'images', 'show me', 'send photos',
+    'see products', 'view', 'catalogue',
+    'catalog', 'items', 'shirts', 'tshirts',
+    't-shirts', 'what do you have',
+    'what you have', 'show collection',
+    'new collection', 'new products',
+    'latest', 'available', 'show products',
+    'send images', 'send collection',
+    'see collection', 'view collection',
+    'view products', 'product list',
+    'show me products', 'show me photos',
+    'show me images', 'send me photos',
+    'send me images', 'send me collection'
+  ];
+
+  return keywords.some(keyword =>
+    lowerText.includes(keyword)
+  );
+}
+
 // DETECT PRODUCT CODES IN MESSAGE
 function detectProductCodes(text) {
   const upperText = text.toUpperCase();
@@ -651,25 +468,8 @@ function detectProductCodes(text) {
 }
 
 // SEND ORDER SUMMARY
-async function sendOrderSummary(
-  phone, customer, settings
-) {
+async function sendOrderSummary(phone, customer) {
   const cart = customer.session.cart;
-
-  let orderTotal = 0;
-  cart.forEach(item => {
-    orderTotal += item.pricePerItem;
-  });
-
-  let deliveryCharge = settings.shippingCharge;
-  if (settings.freeShipping) {
-    deliveryCharge = 0;
-  } else if (orderTotal >= settings.freeShippingAbove) {
-    deliveryCharge = 0;
-  }
-
-  const grandTotal = orderTotal + deliveryCharge;
-
   let summary =
     "🛒 *Please Confirm Your Selection:*\n\n";
 
@@ -679,21 +479,13 @@ async function sendOrderSummary(
     summary += `   Price: ${item.pricePerItem}\n\n`;
   });
 
-  summary += `──────────────────\n`;
-  summary += `Total Price: ${orderTotal}\n`;
-  summary += `Delivery: ${deliveryCharge === 0 
-    ? 'FREE' 
-    : deliveryCharge + ' rupees'}\n`;
-  summary += `Grand Total: ${grandTotal}\n`;
-  summary += `──────────────────\n\n`;
   summary += `Is this selection correct? `;
   summary += `Please reply Yes or No`;
-
   await sendTextMessage(phone, summary);
 }
 
 // SEND WELCOME BUTTONS
-async function sendWelcomeButtons(to, settings) {
+async function sendWelcomeButtons(to) {
   try {
     await axios.post(
       `https://graph.facebook.com/v18.0/${process.env.PHONE_NUMBER_ID}/messages`,
@@ -704,9 +496,7 @@ async function sendWelcomeButtons(to, settings) {
         interactive: {
           type: 'button',
           body: {
-            text: `Welcome to ${settings.businessName}! 👕\n\nBest quality t-shirts at factory price!\n${settings.freeShipping 
-              ? 'FREE delivery on all orders! 🎉' 
-              : `Free delivery above ${settings.freeShippingAbove} rupees! 🔥`}`
+            text: `Welcome to ${process.env.BUSINESS_NAME}! 👕\n\nBest quality t-shirts at factory price!\nFree delivery above 999 rupees! 🔥`
           },
           action: {
             buttons: [
@@ -770,8 +560,8 @@ async function sendAllProductImages(to) {
     "⬆️ Liked something?\n\n" +
     "Just send the product code!\n" +
     "Example: *TS01* or *TS01 TS03*\n\n" +
-    "Our assistant will help you " +
-    "complete your order! 😊"
+    "Our assistant will help you complete " +
+    "your order! 😊"
   );
 }
 
@@ -825,29 +615,33 @@ async function sendImageMessage(to, imageUrl, caption) {
 }
 
 // GROQ AI
-async function getAIReply(history, systemPrompt) {
+async function getGeminiReply(history, systemPrompt) {
   try {
+    // Convert and clean history format
     const messages = [];
 
+    // Add system prompt first
     messages.push({
       role: 'system',
       content: systemPrompt
     });
 
+    // Convert history safely
     history.forEach(msg => {
+      // Skip empty messages
       if (!msg || !msg.parts || !msg.parts[0]) return;
       const text = msg.parts[0].text;
       if (!text || text.trim() === '') return;
 
       messages.push({
-        role: msg.role === 'model'
-          ? 'assistant'
+        role: msg.role === 'model' 
+          ? 'assistant' 
           : 'user',
         content: text
       });
     });
 
-    console.log('Sending to Groq:',
+    console.log('Sending to Groq:', 
       messages.length, 'messages');
 
     const response = await axios.post(
@@ -872,7 +666,7 @@ async function getAIReply(history, systemPrompt) {
   } catch (error) {
     console.error('Groq error:', error.message);
     if (error.response) {
-      console.error('Groq details:',
+      console.error('Groq details:', 
         JSON.stringify(error.response.data));
     }
     return "Sorry, please try again in a moment!";
