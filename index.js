@@ -618,7 +618,7 @@ async function sendImageMessage(to, imageUrl, caption) {
 async function getGeminiReply(history, systemPrompt) {
   try {
     const response = await axios.post(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-lite:generateContent?key=${process.env.GEMINI_API_KEY}`,
       {
         system_instruction: {
           parts: [{ text: systemPrompt }]
