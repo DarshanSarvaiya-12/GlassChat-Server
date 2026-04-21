@@ -12,7 +12,7 @@ const connectDB = async () => {
 
 // Customer Schema
 const customerSchema = new mongoose.Schema({
-
+  
   // IDENTITY
   phone: {
     type: String,
@@ -27,7 +27,7 @@ const customerSchema = new mongoose.Schema({
     type: String,
     default: null
   },
-
+  
   // CURRENT SESSION
   session: {
     stage: {
@@ -44,7 +44,7 @@ const customerSchema = new mongoose.Schema({
       ],
       default: 'new'
     },
-
+    
     // CART ITEMS
     cart: [{
       code: String,
@@ -64,13 +64,13 @@ const customerSchema = new mongoose.Schema({
         default: 0
       }
     }],
-
+    
     // DELIVERY INFO
     deliveryAddress: {
       type: String,
       default: null
     },
-
+    
     // PRICE SUMMARY
     orderTotal: {
       type: Number,
@@ -84,14 +84,14 @@ const customerSchema = new mongoose.Schema({
       type: Number,
       default: 0
     },
-
+    
     // CONVERSATION HISTORY
     // Last 20 messages only
     conversationHistory: {
       type: Array,
       default: []
     },
-
+    
     // AUTO EXPIRE after 7 days
     expiresAt: {
       type: Date,
@@ -101,7 +101,7 @@ const customerSchema = new mongoose.Schema({
       index: { expires: 0 }
     }
   },
-
+  
   // ORDER HISTORY
   orders: [{
     orderId: {
@@ -141,7 +141,7 @@ const customerSchema = new mongoose.Schema({
       default: 'pending'
     }
   }],
-
+  
   // VISIT TRACKING
   firstVisit: {
     type: Date,
@@ -155,7 +155,7 @@ const customerSchema = new mongoose.Schema({
     type: Number,
     default: 1
   },
-
+  
   // PREFERENCES
   // Learned automatically over time
   preferences: {
@@ -168,12 +168,92 @@ const customerSchema = new mongoose.Schema({
       default: []
     }
   }
-
+  
 });
 
 const Customer = mongoose.model(
   'Customer',
   customerSchema
 );
+// Settings Schema
+const settingsSchema = new mongoose.Schema({
+  // Only one settings document
+  singleton: {
+    type: String,
+    default: 'main',
+    unique: true
+  },
+
+  // Business Info
+  businessName: {
+    type: String,
+    default: 'My Shop'
+  },
+  businessCity: {
+    type: String,
+    default: 'Surat'
+  },
+
+  // System Prompt
+  systemPrompt: {
+    type: String,
+    default: ''
+  },
+
+  // Offers
+  offers: [{
+    title: String,
+    description: String,
+    active: {
+      type: Boolean,
+      default: true
+    }
+  }],
+
+  // Shipping
+  freeShipping: {
+    type: Boolean,
+    default: false
+  },
+  freeShippingAbove: {
+    type: Number,
+    default: 999
+  },
+  shippingCharge: {
+    type: Number,
+    default: 99
+  }
+});
+
+const Settings = mongoose.model(
+  'Settings',
+  settingsSchema
+);
+
+// Get or create settings
+async function getSettings() {
+  try {
+    let settings = await Settings.findOne({
+      singleton: 'main'
+    });
+    if (!settings) {
+      settings = new Settings({
+        singleton: 'main'
+      });
+      await settings.save();
+    }
+    return settings;
+  } catch (error) {
+    console.error('Settings error:', error.message);
+    return null;
+  }
+}
+
+module.exports = {
+  connectDB,
+  Customer,
+  Settings,
+  getSettings
+};
 
 module.exports = { connectDB, Customer };
