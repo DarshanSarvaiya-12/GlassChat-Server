@@ -647,7 +647,7 @@ async function getGeminiReply(history, systemPrompt) {
     const response = await axios.post(
       'https://api.groq.com/openai/v1/chat/completions',
       {
-        model: 'llama3-8b-8192',
+        model: 'llama-3.3-70b-versatile',
         messages: messages,
         max_tokens: 500,
         temperature: 0.7
