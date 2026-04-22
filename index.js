@@ -2,12 +2,16 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const products = require('./products');
-const { connectDB, Customer } = require('./db');
+const {
+  connectDB,
+  Customer,
+  Settings,
+  getSettings
+} = require('./db');
 
 const app = express();
 app.use(express.json());
 
-// Connect MongoDB
 connectDB();
 
 // Health check
@@ -29,7 +33,125 @@ app.get('/webhook', (req, res) => {
   }
 });
 
-// RECEIVE ALL MESSAGES
+// ─────────────────────────────────────
+// SETTINGS API
+// ─────────────────────────────────────
+
+app.get('/settings', async (req, res) => {
+  try {
+    const settings = await getSettings();
+    res.json(settings);
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/settings/business', async (req, res) => {
+  try {
+    const { businessName, businessCity } = req.body;
+    await Settings.findOneAndUpdate(
+      { singleton: 'main' },
+      { $set: { businessName, businessCity } },
+      { new: true, upsert: true }
+    );
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/settings/prompt', async (req, res) => {
+  try {
+    const { systemPrompt } = req.body;
+    await Settings.findOneAndUpdate(
+      { singleton: 'main' },
+      { $set: { systemPrompt } },
+      { new: true, upsert: true }
+    );
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/settings/shipping', async (req, res) => {
+  try {
+    const {
+      freeShipping,
+      freeShippingAbove,
+      shippingCharge
+    } = req.body;
+    await Settings.findOneAndUpdate(
+      { singleton: 'main' },
+      {
+        $set: {
+          freeShipping,
+          freeShippingAbove,
+          shippingCharge
+        }
+      },
+      { new: true, upsert: true }
+    );
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/settings/offers/add', async (req, res) => {
+  try {
+    const { title, description } = req.body;
+    await Settings.findOneAndUpdate(
+      { singleton: 'main' },
+      {
+        $push: {
+          offers: { title, description, active: true }
+        }
+      },
+      { upsert: true }
+    );
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/settings/offers/update', async (req, res) => {
+  try {
+    const { offerId, title, description, active } = req.body;
+    await Settings.findOneAndUpdate(
+      { singleton: 'main', 'offers._id': offerId },
+      {
+        $set: {
+          'offers.$.title': title,
+          'offers.$.description': description,
+          'offers.$.active': active
+        }
+      }
+    );
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post('/settings/offers/delete', async (req, res) => {
+  try {
+    const { offerId } = req.body;
+    await Settings.findOneAndUpdate(
+      { singleton: 'main' },
+      { $pull: { offers: { _id: offerId } } }
+    );
+    res.json({ success: true });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ─────────────────────────────────────
+// WHATSAPP WEBHOOK
+// ─────────────────────────────────────
+
 app.post('/webhook', async (req, res) => {
   try {
     const entry = req.body.entry?.[0];
@@ -42,207 +164,380 @@ app.post('/webhook', async (req, res) => {
     const userPhone = message.from;
     const messageType = message.type;
 
-    // Get or create customer from MongoDB
     let customer = await getOrCreateCustomer(userPhone);
-
     if (!customer) return res.sendStatus(200);
 
-    // BUTTON TAP HANDLER
+    const settings = await getSettings();
+
+    // ── BUTTON TAP HANDLER ──
     if (messageType === 'interactive') {
       const buttonId =
         message.interactive?.button_reply?.id;
-      console.log(`Button: ${buttonId}`);
+      console.log(`Button: ${buttonId} from ${userPhone}`);
 
-      if (buttonId === 'view_collection') {
-        await updateCustomerStage(
-          userPhone, 'browsing'
-        );
-        await sendAllProductImages(userPhone);
+      // SIZE BUTTONS
+      if (['size_s','size_m','size_l',
+           'size_xl','size_xxl'].includes(buttonId)) {
+        const sizeMap = {
+          size_s: 'S', size_m: 'M', size_l: 'L',
+          size_xl: 'XL', size_xxl: 'XXL'
+        };
+        const selectedSize = sizeMap[buttonId];
 
-      } else if (buttonId === 'todays_offers') {
-        await sendTextMessage(userPhone,
-          "🔥 *Today's Special Offers!*\n\n" +
-          "✅ Buy 2 = 10% OFF\n" +
-          "✅ Buy 3 = 20% OFF\n" +
-          "✅ Free delivery above 999 rupees\n\n" +
-          "Tap below to view our collection!"
-        );
-        await sendWelcomeButtons(userPhone);
-
-      } else if (buttonId === 'talk_agent') {
-        await sendTextMessage(userPhone,
-          "👤 *Agent Support*\n\n" +
-          "Our agent is available 9AM to 6PM.\n\n" +
-          "Meanwhile you can view our collection!"
-        );
-        await sendWelcomeButtons(userPhone);
-      }
-      return res.sendStatus(200);
-    }
-
-    // TEXT MESSAGE HANDLER
-    if (messageType === 'text') {
-      const userText = message.text.body.trim();
-      console.log(`${userPhone}: ${userText}`);
-
-      // NEW CUSTOMER
-      if (customer.session.stage === 'new') {
-        await sendWelcomeButtons(userPhone);
-        return res.sendStatus(200);
-      }
-
-      // DETECT COLLECTION REQUEST
-      if (isCollectionRequest(userText)) {
-        await updateCustomerStage(
-          userPhone, 'browsing'
-        );
-        await sendAllProductImages(userPhone);
-        return res.sendStatus(200);
-      }
-
-      // DETECT PRODUCT CODES
-      const detectedCodes = detectProductCodes(userText);
-
-      if (detectedCodes.length > 0 &&
-        customer.session.stage === 'browsing') {
-
-        // Save selected products to DB
         await updateCustomerSession(userPhone, {
-          'session.stage': 'confirmed',
-          'session.cart': detectedCodes.map(code => ({
-            code: code,
-            name: products[code].name,
-            color: products[code].color,
-            pricePerItem: products[code].price,
-          }))
+          'session.stage': 'browsing',
+          'session.selectedSize': selectedSize,
+          'session.cart': []
         });
 
-        // Refresh customer data
+        await sendAllProductImages(userPhone, selectedSize);
+        return res.sendStatus(200);
+      }
+
+      // PAYMENT METHOD BUTTONS
+      if (buttonId === 'pay_gpay') {
+        await updateCustomerSession(userPhone, {
+          'session.stage': 'awaiting_payment',
+          'session.paymentMethod': 'gpay'
+        });
         customer = await Customer.findOne({
           phone: userPhone
         });
-
-        // Send order summary
-        await sendOrderSummary(userPhone, customer);
+        const grandTotal =
+          customer.session.grandTotal;
+        await sendTextMessage(userPhone,
+          `💳 *GPay / Paytm Payment*\n\n` +
+          `Please send ₹*${grandTotal}* to:\n\n` +
+          `📱 *9998887776*\n\n` +
+          `After payment please send the ` +
+          `*screenshot* here! 📸`
+        );
         return res.sendStatus(200);
       }
 
-      // GEMINI HANDLES CONVERSATION
-      customer = await Customer.findOne({
-        phone: userPhone
-      });
+      if (buttonId === 'pay_cod') {
+        await updateCustomerSession(userPhone, {
+          'session.stage': 'cod_address',
+          'session.paymentMethod': 'cod',
+          'session.deliveryCharge': 99
+        });
+        await sendAddressFormat(userPhone);
+        return res.sendStatus(200);
+      }
 
-      const customerContext =
-        buildCustomerContext(customer);
+      return res.sendStatus(200);
+    }
 
-      const systemPrompt =
-`You are Alex, a friendly sales assistant for 
-${process.env.BUSINESS_NAME} in 
-${process.env.BUSINESS_CITY}.
+    // ── TEXT MESSAGE HANDLER ──
+    if (messageType === 'text') {
+      const userText = message.text.body.trim();
+      console.log(`${userPhone} [${customer.session.stage}]: ${userText}`);
 
-CUSTOMER DATA:
-${customerContext}
+      const stage = customer.session.stage;
 
-YOUR PERSONALITY:
-- Friendly and professional
-- Speak only in simple English
-- Use emojis naturally
-- Keep messages short
-- Never say you are AI
-- Ask one question at a time
+      // ── NEW CUSTOMER ──
+      if (stage === 'new') {
+        await sendWelcomeAndSizeButtons(
+          userPhone, settings
+        );
+        await updateCustomerSession(userPhone, {
+          'session.stage': 'welcomed'
+        });
+        return res.sendStatus(200);
+      }
 
-YOUR JOB - Follow these steps strictly:
-Step 1: Customer selects products (already done)
-Step 2: Confirm their selection warmly
-        Example: "You want TS02 Red T-Shirt right?"
-        Wait for YES before moving forward
-Step 3: After YES - Ask size for each product
-        "What size do you need? S/M/L/XL/XXL"
-        Save size immediately when customer gives it
-Step 4: Ask quantity
-        "How many pieces do you need?"
-        Save quantity immediately
-Step 5: Ask full name
-        "May I know your full name please?"
-        Save name immediately
-Step 6: Ask delivery address
-        "Please share your delivery address"
-        Save address immediately
-Step 7: Show complete order summary:
-        Name: [name]
-        Contact: [phone]
-        Products: [list]
-        Sizes: [sizes]
-        Colors: [colors]
-        Price: [breakdown]
-        Address: [address]
-        Delivery: [charge]
-        Total: [grand total]
-Step 8: Send payment details:
-        "Please pay using GPay or PhonePe:
-        Number: 9998887776
-        Amount: [total]
-        After payment please send screenshot!"
-Step 9: After customer sends payment screenshot
-        Confirm order with order ID
-        Example: "Order confirmed! 
-        Your Order ID is ORD-XXXX
-        Delivery in 3 to 5 days!"
+      // ── WELCOMED - WAITING FOR SIZE ──
+      if (stage === 'welcomed') {
+        await sendSizeButtons(userPhone);
+        return res.sendStatus(200);
+      }
 
-IMPORTANT TAGS:
-Add these at the END of your reply only.
-Customer will NOT see these tags.
-- After name given: updateName:[name]
-- After size confirmed: updateSize:[code]:[size]
-- After quantity confirmed: updateQty:[code]:[qty]
-- After address confirmed: updateAddress:[address]
+      // ── BROWSING - DETECT PRODUCT CODE ──
+      if (stage === 'browsing') {
+        // Check size in numbers request
+        if (isSizeNumberRequest(userText)) {
+          await sendTextMessage(userPhone,
+            "📏 *Size Guide:*\n\n" +
+            "S  = 28 - 30\n" +
+            "M  = 30 - 32\n" +
+            "L  = 32 - 34\n" +
+            "XL = 34 - 36\n\n" +
+            "Please send the product code " +
+            "you want to order! 😊"
+          );
+          return res.sendStatus(200);
+        }
 
-PRODUCTS: ${JSON.stringify(products)}
-OFFERS: Buy 2 get 10 percent off
-        Buy 3 get 20 percent off
-DELIVERY: 99 rupees below 999
-          FREE above 999 rupees`;
+        const detectedCodes =
+          detectProductCodes(userText);
 
-      // Get conversation history from DB
-      const recentHistory =
-        customer.session.conversationHistory || [];
+        if (detectedCodes.length > 0) {
+          const code = detectedCodes[0];
+          const product = products[code];
+          const size = customer.session.selectedSize;
 
-      recentHistory.push({
-        role: 'user',
-        parts: [{ text: userText }]
-      });
+          // Save current item
+          await updateCustomerSession(userPhone, {
+            'session.stage': 'item_selecting',
+            'session.currentItem': {
+              code,
+              name: product.name,
+              color: product.color,
+              size,
+              pricePerItem: product.price
+            }
+          });
 
-      const aiReply = await getGeminiReply(
-        recentHistory,
-        systemPrompt
-      );
+          await sendTextMessage(userPhone,
+            `✅ *Nice choice!*\n\n` +
+            `You selected:\n` +
+            `Code: *${code}*\n` +
+            `Colour: *${product.color}*\n` +
+            `Size: *${size}*\n` +
+            `Price: *₹${product.price}*\n\n` +
+            `How many *${code}* do you want to buy?`
+          );
+          return res.sendStatus(200);
+        }
 
-      // Parse and save data tags from AI reply
-      await parseAndSaveAIData(
-        userPhone,
-        aiReply,
-        customer
-      );
+        await sendTextMessage(userPhone,
+          "Please send a valid product code.\n" +
+          "Example: *TS01* or *TS02*"
+        );
+        return res.sendStatus(200);
+      }
 
-      // Clean reply before sending to customer
-      const cleanReply = aiReply
-        .replace(/update\w+:[^\n]*/gi, '')
-        .trim();
+      // ── ITEM SELECTING - GET QUANTITY ──
+      if (stage === 'item_selecting') {
+        const qty = parseInt(userText);
+        if (isNaN(qty) || qty < 1) {
+          await sendTextMessage(userPhone,
+            "Please send a valid number.\n" +
+            "Example: 1 or 2 or 3"
+          );
+          return res.sendStatus(200);
+        }
 
-      // Save conversation to DB
-      recentHistory.push({
-        role: 'model',
-        parts: [{ text: cleanReply }]
-      });
+        const currentItem = customer.session.currentItem;
+        const totalPrice =
+          currentItem.pricePerItem * qty;
+        const newItem = {
+          ...currentItem,
+          quantity: qty,
+          totalPrice
+        };
 
-      // Keep only last 20 messages
-      const trimmedHistory = recentHistory.slice(-20);
+        // Add to cart
+        const existingCart =
+          customer.session.cart || [];
+        existingCart.push(newItem);
 
-      await updateCustomerSession(userPhone, {
-        'session.conversationHistory': trimmedHistory
-      });
+        // Calculate totals
+        const orderTotal = existingCart.reduce(
+          (sum, i) => sum + i.totalPrice, 0
+        );
+        const settings = await getSettings();
+        let deliveryCharge = settings.shippingCharge;
+        if (settings.freeShipping) {
+          deliveryCharge = 0;
+        } else if (
+          orderTotal >= settings.freeShippingAbove
+        ) {
+          deliveryCharge = 0;
+        }
+        const grandTotal = orderTotal + deliveryCharge;
 
-      await sendTextMessage(userPhone, cleanReply);
+        await updateCustomerSession(userPhone, {
+          'session.cart': existingCart,
+          'session.currentItem': null,
+          'session.orderTotal': orderTotal,
+          'session.deliveryCharge': deliveryCharge,
+          'session.grandTotal': grandTotal,
+          'session.stage': 'awaiting_more'
+        });
+
+        await sendTextMessage(userPhone,
+          `Okay! Now do you want to select ` +
+          `another T-Shirt?\n\n` +
+          `Reply *Yes* to select more\n` +
+          `Reply *No* if you are done`
+        );
+        return res.sendStatus(200);
+      }
+
+      // ── AWAITING MORE ITEMS ──
+      if (stage === 'awaiting_more') {
+        const lower = userText.toLowerCase();
+
+        if (lower === 'yes' || lower === 'y') {
+          await updateCustomerSession(userPhone, {
+            'session.stage': 'browsing'
+          });
+          await sendTextMessage(userPhone,
+            "Ok I'm waiting! 😊\n\n" +
+            "Send me the code of the next " +
+            "T-Shirt you want!"
+          );
+          return res.sendStatus(200);
+        }
+
+        if (lower === 'no' || lower === 'n') {
+          // Customer done selecting
+          customer = await Customer.findOne({
+            phone: userPhone
+          });
+          await sendTextMessage(userPhone,
+            "Okay No Problem! 👍"
+          );
+          await delay(500);
+          await sendBill(userPhone, customer);
+          await delay(500);
+          await sendPaymentMethodButtons(userPhone);
+          await updateCustomerSession(userPhone, {
+            'session.stage': 'payment_method'
+          });
+          return res.sendStatus(200);
+        }
+
+        // Check if it's I want these / done
+        if (isDoneSelecting(userText)) {
+          customer = await Customer.findOne({
+            phone: userPhone
+          });
+          await sendTextMessage(userPhone,
+            "Okay Get it! 🎉"
+          );
+          await delay(500);
+          await sendBill(userPhone, customer);
+          await delay(500);
+          await sendPaymentMethodButtons(userPhone);
+          await updateCustomerSession(userPhone, {
+            'session.stage': 'payment_method'
+          });
+          return res.sendStatus(200);
+        }
+
+        await sendTextMessage(userPhone,
+          "Please reply *Yes* or *No*"
+        );
+        return res.sendStatus(200);
+      }
+
+      // ── AWAITING PAYMENT SCREENSHOT ──
+      if (stage === 'awaiting_payment') {
+        // Any message after payment instruction
+        // treat as payment confirmation
+        customer = await Customer.findOne({
+          phone: userPhone
+        });
+        await updateCustomerSession(userPhone, {
+          'session.stage': 'online_address'
+        });
+        await sendTextMessage(userPhone,
+          `✅ Okay! We received your ` +
+          `*₹${customer.session.grandTotal}* payment.`
+        );
+        await delay(500);
+        await sendAddressFormat(userPhone);
+        return res.sendStatus(200);
+      }
+
+      // ── COD / ONLINE ADDRESS ──
+      if (stage === 'cod_address' ||
+          stage === 'online_address') {
+        // Check if address has all required fields
+        const addressValid = isAddressValid(userText);
+
+        if (!addressValid) {
+          await sendTextMessage(userPhone,
+            "⚠️ Please fill all details properly " +
+            "in the given format.\n\n" +
+            "Some fields are missing!"
+          );
+          await sendAddressFormat(userPhone);
+          return res.sendStatus(200);
+        }
+
+        await updateCustomerSession(userPhone, {
+          'session.deliveryAddress': userText,
+          'session.stage': 'awaiting_confirmation'
+        });
+
+        await sendTextMessage(userPhone, "Okay ✅");
+        await delay(1000);
+        await sendTextMessage(userPhone,
+          "We will dispatch by Tomorrow and you " +
+          "will receive your Parcel within *5-7 Days*. 📦"
+        );
+
+        // Wait 2 minutes for confirmation
+        setTimeout(async () => {
+          const c = await Customer.findOne({
+            phone: userPhone
+          });
+          if (c && c.session.stage ===
+              'awaiting_confirmation') {
+            await sendTextMessage(userPhone,
+              "Please send *OKAY* or *DONE* " +
+              "to confirm your order ✅"
+            );
+          }
+        }, 2 * 60 * 1000);
+
+        return res.sendStatus(200);
+      }
+
+      // ── AWAITING CONFIRMATION ──
+      if (stage === 'awaiting_confirmation') {
+        if (isConfirmation(userText)) {
+          await updateCustomerSession(userPhone, {
+            'session.stage': 'completed'
+          });
+          await sendTextMessage(userPhone,
+            "Your Order is Confirmed! 🎉"
+          );
+          await delay(500);
+          await sendTextMessage(userPhone,
+            "Thank you for Visiting! 😄"
+          );
+          return res.sendStatus(200);
+        }
+
+        await sendTextMessage(userPhone,
+          "Please send *OKAY* or *DONE* " +
+          "to confirm your order ✅"
+        );
+        return res.sendStatus(200);
+      }
+
+      // ── COMPLETED ──
+      if (stage === 'completed') {
+        await sendTextMessage(userPhone,
+          "Your order has already been confirmed! 🎉\n\n" +
+          "Thank you for shopping with us! 😄"
+        );
+        return res.sendStatus(200);
+      }
+    }
+
+    // IMAGE MESSAGE - treat as payment screenshot
+    if (messageType === 'image') {
+      const stage = customer.session.stage;
+      if (stage === 'awaiting_payment') {
+        customer = await Customer.findOne({
+          phone: userPhone
+        });
+        await updateCustomerSession(userPhone, {
+          'session.stage': 'online_address'
+        });
+        await sendTextMessage(userPhone,
+          `✅ Okay! We received your ` +
+          `*₹${customer.session.grandTotal}* payment.`
+        );
+        await delay(500);
+        await sendAddressFormat(userPhone);
+        return res.sendStatus(200);
+      }
     }
 
     res.sendStatus(200);
@@ -252,11 +547,13 @@ DELIVERY: 99 rupees below 999
   }
 });
 
-// GET OR CREATE CUSTOMER
+// ─────────────────────────────────────
+// HELPER FUNCTIONS
+// ─────────────────────────────────────
+
 async function getOrCreateCustomer(phone) {
   try {
     let customer = await Customer.findOne({ phone });
-
     if (!customer) {
       customer = new Customer({
         phone,
@@ -272,7 +569,6 @@ async function getOrCreateCustomer(phone) {
           $set: { lastVisit: new Date() }
         }
       );
-      console.log(`Returning: ${phone}`);
     }
     return customer;
   } catch (error) {
@@ -281,135 +577,6 @@ async function getOrCreateCustomer(phone) {
   }
 }
 
-// BUILD CUSTOMER CONTEXT FOR GEMINI
-function buildCustomerContext(customer) {
-  let context = '';
-
-  if (customer.totalVisits > 1) {
-    context += `RETURNING CUSTOMER\n`;
-    context += `Visits: ${customer.totalVisits}\n`;
-  } else {
-    context += `NEW CUSTOMER\n`;
-  }
-
-  if (customer.name) {
-    context += `Name: ${customer.name}\n`;
-  }
-
-  context += `Phone: ${customer.phone}\n`;
-  context += `Stage: ${customer.session.stage}\n`;
-
-  if (customer.session.cart?.length > 0) {
-    context += `\nCURRENT CART:\n`;
-    customer.session.cart.forEach(item => {
-      context += `- ${item.code}: ${item.name}`;
-      context += ` ${item.color}`;
-      if (item.size) {
-        context += ` Size: ${item.size}`;
-      }
-      if (item.quantity) {
-        context += ` Qty: ${item.quantity}`;
-      }
-      context += ` Price: ${item.pricePerItem}\n`;
-    });
-  }
-
-  if (customer.session.deliveryAddress) {
-    context += `Address: `;
-    context += `${customer.session.deliveryAddress}\n`;
-  }
-
-  if (customer.orders?.length > 0) {
-    context += `\nPREVIOUS ORDERS: `;
-    context += `${customer.orders.length} orders\n`;
-    const lastOrder =
-      customer.orders[customer.orders.length - 1];
-    context += `Last order: ${lastOrder.grandTotal}`;
-    context += ` - ${lastOrder.deliveryStatus}\n`;
-  }
-
-  return context;
-}
-
-// PARSE AI REPLY AND SAVE DATA TAGS
-async function parseAndSaveAIData(
-  phone, reply, customer
-) {
-  try {
-    const updates = {};
-
-    // Extract name
-    const nameMatch = reply.match(
-      /updateName:([^\n]+)/i
-    );
-    if (nameMatch) {
-      updates.name = nameMatch[1].trim();
-      updates['session.stage'] = 'address';
-    }
-
-    // Extract size
-    const sizeMatch = reply.match(
-      /updateSize:(\w+):(\w+)/i
-    );
-    if (sizeMatch) {
-      const code = sizeMatch[1];
-      const size = sizeMatch[2];
-      const cart = customer.session.cart.map(item => {
-        if (item.code === code) item.size = size;
-        return item;
-      });
-      updates['session.cart'] = cart;
-      updates['session.stage'] = 'sizing';
-    }
-
-    // Extract quantity
-    const qtyMatch = reply.match(
-      /updateQty:(\w+):(\d+)/i
-    );
-    if (qtyMatch) {
-      const code = qtyMatch[1];
-      const qty = parseInt(qtyMatch[2]);
-      const cart = customer.session.cart.map(item => {
-        if (item.code === code) {
-          item.quantity = qty;
-          item.totalPrice = item.pricePerItem * qty;
-        }
-        return item;
-      });
-
-      const orderTotal = cart.reduce(
-        (sum, item) => sum + (item.totalPrice || 0), 0
-      );
-      const deliveryCharge = orderTotal >= 999 ? 0 : 99;
-      const grandTotal = orderTotal + deliveryCharge;
-
-      updates['session.cart'] = cart;
-      updates['session.orderTotal'] = orderTotal;
-      updates['session.deliveryCharge'] = deliveryCharge;
-      updates['session.grandTotal'] = grandTotal;
-      updates['session.stage'] = 'quantity';
-    }
-
-    // Extract address
-    const addressMatch = reply.match(
-      /updateAddress:([^\n]+)/i
-    );
-    if (addressMatch) {
-      updates['session.deliveryAddress'] =
-        addressMatch[1].trim();
-      updates['session.stage'] = 'payment';
-    }
-
-    if (Object.keys(updates).length > 0) {
-      await updateCustomerSession(phone, updates);
-      console.log(`DB saved:`, updates);
-    }
-  } catch (error) {
-    console.error('Parse error:', error.message);
-  }
-}
-
-// UPDATE CUSTOMER SESSION
 async function updateCustomerSession(phone, data) {
   try {
     await Customer.findOneAndUpdate(
@@ -422,40 +589,6 @@ async function updateCustomerSession(phone, data) {
   }
 }
 
-// UPDATE CUSTOMER STAGE
-async function updateCustomerStage(phone, stage) {
-  await updateCustomerSession(phone, {
-    'session.stage': stage
-  });
-}
-
-// DETECT IF CUSTOMER WANTS TO SEE COLLECTION
-function isCollectionRequest(text) {
-  const lowerText = text.toLowerCase();
-
-  const keywords = [
-    'collection', 'products', 'photos',
-    'images', 'show me', 'send photos',
-    'see products', 'view', 'catalogue',
-    'catalog', 'items', 'shirts', 'tshirts',
-    't-shirts', 'what do you have',
-    'what you have', 'show collection',
-    'new collection', 'new products',
-    'latest', 'available', 'show products',
-    'send images', 'send collection',
-    'see collection', 'view collection',
-    'view products', 'product list',
-    'show me products', 'show me photos',
-    'show me images', 'send me photos',
-    'send me images', 'send me collection'
-  ];
-
-  return keywords.some(keyword =>
-    lowerText.includes(keyword)
-  );
-}
-
-// DETECT PRODUCT CODES IN MESSAGE
 function detectProductCodes(text) {
   const upperText = text.toUpperCase();
   const foundCodes = [];
@@ -467,25 +600,61 @@ function detectProductCodes(text) {
   return foundCodes;
 }
 
-// SEND ORDER SUMMARY
-async function sendOrderSummary(phone, customer) {
-  const cart = customer.session.cart;
-  let summary =
-    "🛒 *Please Confirm Your Selection:*\n\n";
-
-  cart.forEach(item => {
-    summary += `✅ ${item.name}\n`;
-    summary += `   Color: ${item.color}\n`;
-    summary += `   Price: ${item.pricePerItem}\n\n`;
-  });
-
-  summary += `Is this selection correct? `;
-  summary += `Please reply Yes or No`;
-  await sendTextMessage(phone, summary);
+function isSizeNumberRequest(text) {
+  const lower = text.toLowerCase();
+  const keywords = [
+    'size in number', 'size number',
+    'number size', 'show size',
+    'size chart', 'what size',
+    'size measurement', 'measurement'
+  ];
+  return keywords.some(k => lower.includes(k));
 }
 
-// SEND WELCOME BUTTONS
-async function sendWelcomeButtons(to) {
+function isDoneSelecting(text) {
+  const lower = text.toLowerCase();
+  const keywords = [
+    'i want these', 'done', 'that\'s all',
+    'thats all', 'finish', 'completed',
+    'i am done', 'i\'m done', 'place order',
+    'order these', 'confirm', 'these only',
+    'bas', 'enough'
+  ];
+  return keywords.some(k => lower.includes(k));
+}
+
+function isAddressValid(text) {
+  const required = [
+    'NAME', 'HOUSE', 'ADDRESS',
+    'CITY', 'PINCODE', 'STATE', 'PHONE'
+  ];
+  const upper = text.toUpperCase();
+  return required.every(field => upper.includes(field));
+}
+
+function isConfirmation(text) {
+  const lower = text.toLowerCase().trim();
+  const keywords = [
+    'okay', 'ok', 'done', 'yes',
+    'confirm', 'confirmed', 'sure',
+    'thank you', 'thanks', 'great',
+    'perfect', 'good', 'alright'
+  ];
+  return keywords.some(k => lower.includes(k));
+}
+
+// SEND WELCOME + SIZE BUTTONS
+async function sendWelcomeAndSizeButtons(to, settings) {
+  await sendTextMessage(to,
+    `Welcome to *${settings.businessName}*! 👕\n\n` +
+    `Buy Stylish T-Shirts from us! 🛍️`
+  );
+  await delay(500);
+  await sendSizeButtons(to);
+}
+
+// SEND SIZE BUTTONS
+async function sendSizeButtons(to) {
   try {
     await axios.post(
       `https://graph.facebook.com/v18.0/${process.env.PHONE_NUMBER_ID}/messages`,
@@ -496,29 +665,101 @@ async function sendWelcomeButtons(to) {
         interactive: {
           type: 'button',
           body: {
-            text: `Welcome to ${process.env.BUSINESS_NAME}! 👕\n\nBest quality t-shirts at factory price!\nFree delivery above 999 rupees! 🔥`
+            text: "Please select your Size 👇"
+          },
+          action: {
+            buttons: [
+              {
+                type: 'reply',
+                reply: { id: 'size_s', title: 'S' }
+              },
+              {
+                type: 'reply',
+                reply: { id: 'size_m', title: 'M' }
+              },
+              {
+                type: 'reply',
+                reply: { id: 'size_l', title: 'L' }
+              }
+            ]
+          }
+        }
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+    await delay(500);
+    // Send XL and XXL as second button message
+    // because WhatsApp only allows 3 buttons max
+    await axios.post(
+      `https://graph.facebook.com/v18.0/${process.env.PHONE_NUMBER_ID}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        to: to,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: {
+            text: "Or select larger size 👇"
+          },
+          action: {
+            buttons: [
+              {
+                type: 'reply',
+                reply: { id: 'size_xl', title: 'XL' }
+              },
+              {
+                type: 'reply',
+                reply: { id: 'size_xxl', title: 'XXL' }
+              }
+            ]
+          }
+        }
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.WHATSAPP_TOKEN}`,
+          'Content-Type': 'application/json'
+        }
+      }
+    );
+  } catch (error) {
+    console.error('Size button error:', error.message);
+  }
+}
+
+// SEND PAYMENT METHOD BUTTONS
+async function sendPaymentMethodButtons(to) {
+  try {
+    await axios.post(
+      `https://graph.facebook.com/v18.0/${process.env.PHONE_NUMBER_ID}/messages`,
+      {
+        messaging_product: 'whatsapp',
+        to: to,
+        type: 'interactive',
+        interactive: {
+          type: 'button',
+          body: {
+            text: "How will you make Payment? 💳"
           },
           action: {
             buttons: [
               {
                 type: 'reply',
                 reply: {
-                  id: 'view_collection',
-                  title: '🛍️ View Collection'
+                  id: 'pay_gpay',
+                  title: '💳 GPay / Paytm'
                 }
               },
               {
                 type: 'reply',
                 reply: {
-                  id: 'todays_offers',
-                  title: '💰 Todays Offers'
-                }
-              },
-              {
-                type: 'reply',
-                reply: {
-                  id: 'talk_agent',
-                  title: '📞 Talk to Agent'
+                  id: 'pay_cod',
+                  title: '💵 Cash on Delivery'
                 }
               }
             ]
@@ -533,35 +774,77 @@ async function sendWelcomeButtons(to) {
       }
     );
   } catch (error) {
-    console.error('Button error:', error.message);
+    console.error('Payment button error:', error.message);
   }
 }
 
 // SEND ALL PRODUCT IMAGES
-async function sendAllProductImages(to) {
+async function sendAllProductImages(to, size) {
   await sendTextMessage(to,
-    "👕 *Our T-Shirt Collection*\n\n" +
-    "Check all images below and send " +
-    "the product code you like!\n\n" +
-    "Example: *TS01* or *TS01 TS03*"
+    `👕 *Our T-Shirt Collection*\n\n` +
+    `Size selected: *${size}*\n\n` +
+    `Check all images below!`
   );
 
   for (const code in products) {
     const product = products[code];
+    const caption =
+      `Code: ${code}\n` +
+      `Colour: ${product.color}\n` +
+      `Price: ₹${product.price}`;
     await sendImageMessage(
       to,
       product.image_url,
-      product.caption
+      caption
     );
-    await delay(500);
+    await delay(600);
   }
 
   await sendTextMessage(to,
-    "⬆️ Liked something?\n\n" +
-    "Just send the product code!\n" +
-    "Example: *TS01* or *TS01 TS03*\n\n" +
-    "Our assistant will help you complete " +
-    "your order! 😊"
+    "Send the *Code* of T-Shirt " +
+    "which you want to buy! 👆\n\n" +
+    "Example: *TS01*"
+  );
+}
+
+// SEND BILL
+async function sendBill(to, customer) {
+  const cart = customer.session.cart;
+  let bill = "🧾 *Your Bill*\n";
+  bill += "─────────────────\n\n";
+
+  cart.forEach((item, index) => {
+    bill += `*${index + 1}. ${item.name}*\n`;
+    bill += `Code     : ${item.code}\n`;
+    bill += `Size     : ${item.size}\n`;
+    bill += `Colour   : ${item.color}\n`;
+    bill += `Qty      : ${item.quantity}\n`;
+    bill += `Price    : ₹${item.totalPrice}\n\n`;
+  });
+
+  bill += `─────────────────\n`;
+  bill += `Total Price    : ₹${customer.session.orderTotal}\n`;
+  bill += `Shipping Cost  : ₹${customer.session.deliveryCharge}\n`;
+  bill += `*Grand Total   : ₹${customer.session.grandTotal}*\n`;
+  bill += `─────────────────`;
+
+  await sendTextMessage(to, bill);
+}
+
+// SEND ADDRESS FORMAT
+async function sendAddressFormat(to) {
+  await sendTextMessage(to,
+    "Please send your Shipping Address " +
+    "in this format:\n\n" +
+    "NAME -\n" +
+    "HOUSE NO -\n" +
+    "ADDRESS -\n" +
+    "LANDMARK -\n" +
+    "CITY -\n" +
+    "PINCODE -\n" +
+    "DISTRICT -\n" +
+    "STATE -\n" +
+    "PHONE NO -"
   );
 }
 
@@ -611,65 +894,6 @@ async function sendImageMessage(to, imageUrl, caption) {
     );
   } catch (error) {
     console.error('Image error:', error.message);
-  }
-}
-
-// GROQ AI
-async function getGeminiReply(history, systemPrompt) {
-  try {
-    // Convert and clean history format
-    const messages = [];
-
-    // Add system prompt first
-    messages.push({
-      role: 'system',
-      content: systemPrompt
-    });
-
-    // Convert history safely
-    history.forEach(msg => {
-      // Skip empty messages
-      if (!msg || !msg.parts || !msg.parts[0]) return;
-      const text = msg.parts[0].text;
-      if (!text || text.trim() === '') return;
-
-      messages.push({
-        role: msg.role === 'model' 
-          ? 'assistant' 
-          : 'user',
-        content: text
-      });
-    });
-
-    console.log('Sending to Groq:', 
-      messages.length, 'messages');
-
-    const response = await axios.post(
-      'https://api.groq.com/openai/v1/chat/completions',
-      {
-        model: 'llama-3.3-70b-versatile',
-        messages: messages,
-        max_tokens: 500,
-        temperature: 0.7
-      },
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.GROQ_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-
-    return response.data.choices[0]
-      .message.content;
-
-  } catch (error) {
-    console.error('Groq error:', error.message);
-    if (error.response) {
-      console.error('Groq details:', 
-        JSON.stringify(error.response.data));
-    }
-    return "Sorry, please try again in a moment!";
   }
 }
 
