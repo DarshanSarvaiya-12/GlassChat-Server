@@ -1,6 +1,5 @@
 const mongoose = require('mongoose');
 
-// Connect to MongoDB
 const connectDB = async () => {
   try {
     await mongoose.connect(process.env.MONGODB_URI);
@@ -10,10 +9,8 @@ const connectDB = async () => {
   }
 };
 
-// Customer Schema
 const customerSchema = new mongoose.Schema({
-  
-  // IDENTITY
+
   phone: {
     type: String,
     required: true,
@@ -27,51 +24,60 @@ const customerSchema = new mongoose.Schema({
     type: String,
     default: null
   },
-  
-  // CURRENT SESSION
+
   session: {
     stage: {
       type: String,
       enum: [
         'new',
+        'welcomed',
+        'size_selected',
         'browsing',
-        'confirmed',
-        'sizing',
-        'quantity',
-        'address',
-        'payment',
+        'item_selecting',
+        'awaiting_more',
+        'payment_method',
+        'awaiting_payment',
+        'cod_address',
+        'online_address',
+        'awaiting_confirmation',
         'completed'
       ],
       default: 'new'
     },
-    
-    // CART ITEMS
+
+    selectedSize: {
+      type: String,
+      default: null
+    },
+
     cart: [{
       code: String,
       name: String,
       color: String,
-      size: {
-        type: String,
-        default: null
-      },
+      size: String,
       quantity: {
         type: Number,
         default: 1
       },
       pricePerItem: Number,
-      totalPrice: {
-        type: Number,
-        default: 0
-      }
+      totalPrice: Number
     }],
-    
-    // DELIVERY INFO
+
+    currentItem: {
+      type: Object,
+      default: null
+    },
+
+    paymentMethod: {
+      type: String,
+      default: null
+    },
+
     deliveryAddress: {
       type: String,
       default: null
     },
-    
-    // PRICE SUMMARY
+
     orderTotal: {
       type: Number,
       default: 0
@@ -84,15 +90,12 @@ const customerSchema = new mongoose.Schema({
       type: Number,
       default: 0
     },
-    
-    // CONVERSATION HISTORY
-    // Last 20 messages only
+
     conversationHistory: {
       type: Array,
       default: []
     },
-    
-    // AUTO EXPIRE after 7 days
+
     expiresAt: {
       type: Date,
       default: () => new Date(
@@ -101,8 +104,7 @@ const customerSchema = new mongoose.Schema({
       index: { expires: 0 }
     }
   },
-  
-  // ORDER HISTORY
+
   orders: [{
     orderId: {
       type: String,
@@ -127,7 +129,7 @@ const customerSchema = new mongoose.Schema({
     grandTotal: Number,
     paymentStatus: {
       type: String,
-      enum: ['pending', 'paid'],
+      enum: ['pending', 'paid', 'cod'],
       default: 'pending'
     },
     deliveryStatus: {
@@ -141,8 +143,7 @@ const customerSchema = new mongoose.Schema({
       default: 'pending'
     }
   }],
-  
-  // VISIT TRACKING
+
   firstVisit: {
     type: Date,
     default: Date.now
@@ -155,9 +156,7 @@ const customerSchema = new mongoose.Schema({
     type: Number,
     default: 1
   },
-  
-  // PREFERENCES
-  // Learned automatically over time
+
   preferences: {
     sizes: {
       type: Object,
@@ -168,39 +167,31 @@ const customerSchema = new mongoose.Schema({
       default: []
     }
   }
-  
 });
 
 const Customer = mongoose.model(
   'Customer',
   customerSchema
 );
-// Settings Schema
+
 const settingsSchema = new mongoose.Schema({
-  // Only one settings document
   singleton: {
     type: String,
     default: 'main',
     unique: true
   },
-
-  // Business Info
   businessName: {
     type: String,
-    default: 'My Shop'
+    default: 'Ashirwad Shop'
   },
   businessCity: {
     type: String,
     default: 'Surat'
   },
-
-  // System Prompt
   systemPrompt: {
     type: String,
     default: ''
   },
-
-  // Offers
   offers: [{
     title: String,
     description: String,
@@ -209,8 +200,6 @@ const settingsSchema = new mongoose.Schema({
       default: true
     }
   }],
-
-  // Shipping
   freeShipping: {
     type: Boolean,
     default: false
@@ -230,16 +219,13 @@ const Settings = mongoose.model(
   settingsSchema
 );
 
-// Get or create settings
 async function getSettings() {
   try {
     let settings = await Settings.findOne({
       singleton: 'main'
     });
     if (!settings) {
-      settings = new Settings({
-        singleton: 'main'
-      });
+      settings = new Settings({ singleton: 'main' });
       await settings.save();
     }
     return settings;
@@ -255,5 +241,3 @@ module.exports = {
   Settings,
   getSettings
 };
-
-module.exports = { connectDB, Customer };
