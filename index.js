@@ -371,7 +371,7 @@ app.post('/webhook', async (req, res) => {
 
           // Ask for next t-shirt
           await sendTextMessage(userPhone,
-            "Okay! Now would you like to select " +
+            "Okay! Now Select Next T-Shirt which you want to buy" +
             "another T-Shirt? 👕\n\n" +
             "Reply *Yes* to select more\n" +
             "Reply *No* if you are done"
@@ -573,6 +573,7 @@ IMPORTANT RULES:
 - Never share competitor information
 - If customer is rude, stay calm and professional
 - Always confirm details before finalizing order
+- Always send Bill in Billing Format which i gaven you (everytime)
 
 YOUR JOB:
 Help customer complete their purchase naturally.
