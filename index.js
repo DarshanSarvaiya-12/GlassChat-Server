@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const axios = require('axios');
 const products = require('./products');
-const { connectDB, Customer, Settings, getSettings } = require('./db');
+const { connectDB, Customer } = require('./db');
 
 const app = express();
 app.use(express.json());
@@ -30,107 +30,6 @@ app.get('/webhook', (req, res) => {
 });
 
 // ─────────────────────────────────────
-// SETTINGS API FOR WEBSITE
-// ─────────────────────────────────────
-
-app.get('/settings', async (req, res) => {
-  try {
-    const settings = await getSettings();
-    res.json(settings);
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/settings/business', async (req, res) => {
-  try {
-    const { businessName, businessCity } = req.body;
-    await Settings.findOneAndUpdate(
-      { singleton: 'main' },
-      { $set: { businessName, businessCity } },
-      { new: true }
-    );
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/settings/prompt', async (req, res) => {
-  try {
-    const { systemPrompt } = req.body;
-    await Settings.findOneAndUpdate(
-      { singleton: 'main' },
-      { $set: { systemPrompt } },
-      { new: true }
-    );
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/settings/shipping', async (req, res) => {
-  try {
-    const { freeShipping, freeShippingAbove, shippingCharge } = req.body;
-    await Settings.findOneAndUpdate(
-      { singleton: 'main' },
-      { $set: { freeShipping, freeShippingAbove, shippingCharge } },
-      { new: true }
-    );
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/settings/offers/add', async (req, res) => {
-  try {
-    const { title, description } = req.body;
-    await Settings.findOneAndUpdate(
-      { singleton: 'main' },
-      { $push: { offers: { title, description, active: true } } },
-      { new: true }
-    );
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/settings/offers/update', async (req, res) => {
-  try {
-    const { offerId, title, description, active } = req.body;
-    await Settings.findOneAndUpdate(
-      { singleton: 'main', 'offers._id': offerId },
-      {
-        $set: {
-          'offers.$.title': title,
-          'offers.$.description': description,
-          'offers.$.active': active
-        }
-      }
-    );
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-app.post('/settings/offers/delete', async (req, res) => {
-  try {
-    const { offerId } = req.body;
-    await Settings.findOneAndUpdate(
-      { singleton: 'main' },
-      { $pull: { offers: { _id: offerId } } }
-    );
-    res.json({ success: true });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ─────────────────────────────────────
 // WHATSAPP WEBHOOK
 // ─────────────────────────────────────
 
@@ -146,41 +45,37 @@ app.post('/webhook', async (req, res) => {
     const userPhone = message.from;
     const messageType = message.type;
 
-    // Get settings
-    const settings = await getSettings();
-
     // Get or create customer
     let customer = await getOrCreateCustomer(userPhone);
     if (!customer) return res.sendStatus(200);
 
     // ── BUTTON TAP HANDLER ──
     if (messageType === 'interactive') {
-      const buttonId = message.interactive?.button_reply?.id;
+      const buttonId =
+        message.interactive?.button_reply?.id;
       console.log(`Button: ${buttonId}`);
 
       // SIZE BUTTONS
-      if (['size_s','size_m','size_l',
-           'size_xl','size_xxl'].includes(buttonId)) {
+      if (['size_s', 'size_m', 'size_l',
+        'size_xl', 'size_xxl'].includes(buttonId)) {
         const sizeMap = {
           size_s: 'S', size_m: 'M', size_l: 'L',
           size_xl: 'XL', size_xxl: 'XXL'
         };
         const selectedSize = sizeMap[buttonId];
 
-        // Save selected size to session
         await updateCustomerSession(userPhone, {
           'session.selectedSize': selectedSize,
           'session.stage': 'browsing'
         });
 
-        // Send all product images
         await sendAllProductImages(userPhone, selectedSize);
         return res.sendStatus(200);
       }
 
       // PAYMENT METHOD BUTTONS
       if (buttonId === 'pay_gpay' ||
-          buttonId === 'pay_paytm') {
+        buttonId === 'pay_paytm') {
         await updateCustomerSession(userPhone, {
           'session.paymentMethod': 'online',
           'session.stage': 'payment'
@@ -189,7 +84,7 @@ app.post('/webhook', async (req, res) => {
           "✅ *Payment Details:*\n\n" +
           "GPay / Paytm Number:\n" +
           `*${process.env.PAYMENT_NUMBER || '9999999999'}*\n\n` +
-          "Please send the exact amount and " +
+          "Please send the exact amount and\n" +
           "after payment send screenshot here! 📸"
         );
         return res.sendStatus(200);
@@ -213,7 +108,9 @@ app.post('/webhook', async (req, res) => {
       console.log(`${userPhone}: ${userText}`);
 
       // Refresh customer
-      customer = await Customer.findOne({ phone: userPhone });
+      customer = await Customer.findOne({
+        phone: userPhone
+      });
 
       // ── NEW CUSTOMER ──
       if (customer.session.stage === 'new') {
@@ -222,23 +119,27 @@ app.post('/webhook', async (req, res) => {
       }
 
       // ── RETURNING CUSTOMER AFTER 10 MINUTES ──
-      const tenMinutesAgo = new Date(Date.now() - 10 * 60 * 1000);
-      const isReturning = customer.totalVisits > 1 &&
+      const tenMinutesAgo = new Date(
+        Date.now() - 10 * 60 * 1000
+      );
+      const isReturning =
+        customer.totalVisits > 1 &&
         customer.lastMessageAt &&
         customer.lastMessageAt < tenMinutesAgo &&
-        customer.session.stage !== 'new';
+        customer.session.stage !== 'new' &&
+        customer.session.stage !== 'completed';
 
-      if (isReturning && !customer.session.askedToContinue) {
+      if (isReturning &&
+        !customer.session.askedToContinue) {
         await updateCustomerSession(userPhone, {
           'session.askedToContinue': true
         });
         await sendTextMessage(userPhone,
-          "👋 Welcome back!\n\n" +
+          "👋 *Welcome back!*\n\n" +
           "Do you want to:\n\n" +
           "*1* - Continue previous conversation\n" +
           "*2* - Start new conversation"
         );
-        // Update last message time
         await Customer.findOneAndUpdate(
           { phone: userPhone },
           { $set: { lastMessageAt: new Date() } }
@@ -250,18 +151,16 @@ app.post('/webhook', async (req, res) => {
       if (customer.session.askedToContinue) {
         const lower = userText.toLowerCase();
         if (lower.includes('1') ||
-            lower.includes('continue') ||
-            lower.includes('previous')) {
+          lower.includes('continue') ||
+          lower.includes('previous')) {
           await updateCustomerSession(userPhone, {
             'session.askedToContinue': false
           });
           await sendTextMessage(userPhone,
             "Great! Let's continue where we left off! 😊"
           );
-          // Continue to Groq with history
         } else if (lower.includes('2') ||
-                   lower.includes('new')) {
-          // Reset session
+          lower.includes('new')) {
           await updateCustomerSession(userPhone, {
             'session.stage': 'new',
             'session.cart': [],
@@ -272,6 +171,7 @@ app.post('/webhook', async (req, res) => {
             'session.orderTotal': 0,
             'session.grandTotal': 0,
             'session.paymentMethod': null,
+            'session.pendingCode': null,
             'session.pendingConfirmation': false
           });
           await sendWelcomeMessage(userPhone);
@@ -285,33 +185,47 @@ app.post('/webhook', async (req, res) => {
         { $set: { lastMessageAt: new Date() } }
       );
 
-      // ── SIZE IN NUMBERS REQUEST ──
       const lowerText = userText.toLowerCase();
+
+      // ── SIZE CHART REQUEST ──
       if (lowerText.includes('size in number') ||
-          lowerText.includes('size chart') ||
-          lowerText.includes('size number') ||
-          lowerText.includes('measurement') ||
-          lowerText.includes('inch')) {
+        lowerText.includes('size chart') ||
+        lowerText.includes('size number') ||
+        lowerText.includes('measurement') ||
+        lowerText.includes('inch')) {
         await sendTextMessage(userPhone,
           "📏 *Size Chart:*\n\n" +
-          "S  = 28 - 30 inches\n" +
-          "M  = 30 - 32 inches\n" +
-          "L  = 32 - 34 inches\n" +
+          "S  = 28 - 30 inches\n\n" +
+          "M  = 30 - 32 inches\n\n" +
+          "L  = 32 - 34 inches\n\n" +
           "XL = 34 - 36 inches\n\n" +
           "Which size would you like? 😊"
         );
         return res.sendStatus(200);
       }
 
+      // ── BILL REQUEST ──
+      if (lowerText.includes('bill') ||
+        lowerText.includes('order') ||
+        lowerText.includes('summary') ||
+        lowerText.includes('total')) {
+        customer = await Customer.findOne({
+          phone: userPhone
+        });
+        if (customer.session.cart?.length > 0) {
+          await sendBillMessage(userPhone, customer);
+          return res.sendStatus(200);
+        }
+      }
+
       // ── DETECT PRODUCT CODE SELECTION ──
       const detectedCodes = detectProductCodes(userText);
       if (detectedCodes.length > 0 &&
-          customer.session.stage === 'browsing') {
+        customer.session.stage === 'browsing') {
 
         const code = detectedCodes[0];
         const product = products[code];
 
-        // Add to cart
         const existingCart = customer.session.cart || [];
         const newItem = {
           code: code,
@@ -326,32 +240,25 @@ app.post('/webhook', async (req, res) => {
 
         await updateCustomerSession(userPhone, {
           'session.cart': existingCart,
-          'session.stage': 'confirmed'
-        });
-
-        customer = await Customer.findOne({ phone: userPhone });
-
-        // Show selection confirmation
-        await sendTextMessage(userPhone,
-          `✅ *Nice Choice!*\n\n` +
-          `You selected:\n` +
-          `Code: *${product.code || code}*\n` +
-          `Colour: *${product.color}*\n` +
-          `Price: *₹${product.price}*\n\n` +
-          `How many *${code}* do you want to buy?`
-        );
-
-        await updateCustomerSession(userPhone, {
           'session.stage': 'quantity',
           'session.pendingCode': code
         });
+
+        await sendTextMessage(userPhone,
+          "✅ *Nice Choice!*\n\n" +
+          `You Selected:\n\n` +
+          `Code   : *${code}*\n\n` +
+          `Colour : *${product.color}*\n\n` +
+          `Price  : *₹${product.price}*\n\n` +
+          `How many *${code}* do you want to buy?`
+        );
 
         return res.sendStatus(200);
       }
 
       // ── HANDLE QUANTITY INPUT ──
       if (customer.session.stage === 'quantity' &&
-          customer.session.pendingCode) {
+        customer.session.pendingCode) {
         const qty = parseInt(userText);
         if (!isNaN(qty) && qty > 0) {
           const code = customer.session.pendingCode;
@@ -369,11 +276,11 @@ app.post('/webhook', async (req, res) => {
             'session.stage': 'browsing'
           });
 
-          // Ask for next t-shirt
           await sendTextMessage(userPhone,
-            "Okay! Now Select Next T-Shirt which you want to buy" +
-            "another T-Shirt? 👕\n\n" +
-            "Reply *Yes* to select more\n" +
+            "Okay! 👍\n\n" +
+            "Now select the next T-Shirt " +
+            "which you want to buy.\n\n" +
+            "Reply *Yes* to select more\n\n" +
             "Reply *No* if you are done"
           );
           return res.sendStatus(200);
@@ -382,40 +289,39 @@ app.post('/webhook', async (req, res) => {
 
       // ── HANDLE YES/NO FOR MORE ITEMS ──
       if (customer.session.stage === 'browsing' &&
-          customer.session.cart?.length > 0) {
+        customer.session.cart?.length > 0) {
         const lower2 = userText.toLowerCase();
 
         if (lower2 === 'yes' || lower2 === 'y') {
           await sendTextMessage(userPhone,
             "Ok I'm waiting! 😊\n\n" +
-            "Send the code of the T-Shirt " +
+            "Send the *Code* of the T-Shirt " +
             "you want to add!"
           );
           return res.sendStatus(200);
         }
 
-        if (lower2 === 'no' || lower2 === 'n' ||
-            lower2.includes('done') ||
-            lower2.includes('these') ||
-            lower2.includes('that') ||
-            lower2.includes('i want these') ||
-            lower2.includes('finalize')) {
-          await updateCustomerSession(userPhone, {
-            'session.stage': 'confirmed'
+        if (lower2 === 'no' ||
+          lower2 === 'n' ||
+          lower2.includes('done') ||
+          lower2.includes('these') ||
+          lower2.includes('that') ||
+          lower2.includes('i want these') ||
+          lower2.includes('finalize')) {
+          customer = await Customer.findOne({
+            phone: userPhone
           });
-          customer = await Customer.findOne({ phone: userPhone });
-          await sendFinalBill(userPhone, customer, settings);
+          await sendFinalBill(userPhone, customer);
           return res.sendStatus(200);
         }
       }
 
       // ── HANDLE ADDRESS SUBMISSION ──
       if (customer.session.stage === 'address') {
-        // Check if message looks like an address
         if (userText.toUpperCase().includes('NAME') ||
-            userText.toUpperCase().includes('HOUSE') ||
-            userText.toUpperCase().includes('PINCODE') ||
-            userText.length > 50) {
+          userText.toUpperCase().includes('HOUSE') ||
+          userText.toUpperCase().includes('PINCODE') ||
+          userText.length > 50) {
 
           await updateCustomerSession(userPhone, {
             'session.deliveryAddress': userText,
@@ -425,17 +331,18 @@ app.post('/webhook', async (req, res) => {
           await sendTextMessage(userPhone, "Okay ✅");
           await delay(1000);
           await sendTextMessage(userPhone,
-            "We will dispatch by Tomorrow and you " +
+            "We will dispatch by *Tomorrow* and you\n" +
             "will receive your parcel within *5-7 Days*! 📦\n\n" +
             "Please send *OKAY* or *DONE* to confirm your order."
           );
 
-          // Wait 2 minutes then remind if no confirmation
+          // Remind after 2 minutes if no confirmation
           setTimeout(async () => {
             const freshCustomer = await Customer.findOne(
               { phone: userPhone }
             );
-            if (freshCustomer?.session?.stage === 'confirming') {
+            if (freshCustomer?.session?.stage ===
+              'confirming') {
               await sendTextMessage(userPhone,
                 "⚠️ Please send *OKAY* or *DONE* " +
                 "to confirm your order!"
@@ -451,10 +358,10 @@ app.post('/webhook', async (req, res) => {
       if (customer.session.stage === 'confirming') {
         const lower3 = userText.toLowerCase();
         if (lower3.includes('ok') ||
-            lower3.includes('done') ||
-            lower3.includes('confirm') ||
-            lower3.includes('yes') ||
-            lower3.includes('thank')) {
+          lower3.includes('done') ||
+          lower3.includes('confirm') ||
+          lower3.includes('yes') ||
+          lower3.includes('thank')) {
 
           await updateCustomerSession(userPhone, {
             'session.stage': 'completed'
@@ -472,25 +379,28 @@ app.post('/webhook', async (req, res) => {
         }
       }
 
-      // ── HANDLE PAYMENT SCREENSHOT ──
+      // ── HANDLE PAYMENT CONFIRMATION BY TEXT ──
       if (customer.session.stage === 'payment' &&
-          customer.session.paymentMethod === 'online') {
-        // Payment confirmed by customer text
+        customer.session.paymentMethod === 'online') {
         const lower4 = userText.toLowerCase();
         if (lower4.includes('done') ||
-            lower4.includes('paid') ||
-            lower4.includes('sent') ||
-            lower4.includes('payment done') ||
-            lower4.includes('screenshot')) {
+          lower4.includes('paid') ||
+          lower4.includes('sent') ||
+          lower4.includes('payment') ||
+          lower4.includes('screenshot')) {
+
+          customer = await Customer.findOne({
+            phone: userPhone
+          });
+          const grandTotal =
+            customer.session.grandTotal || 0;
+
           await updateCustomerSession(userPhone, {
             'session.stage': 'address'
           });
 
-          customer = await Customer.findOne({ phone: userPhone });
-          const grandTotal = customer.session.grandTotal || 0;
-
           await sendTextMessage(userPhone,
-            `✅ Okay! We received your ` +
+            `✅ Okay! We received your\n` +
             `*₹${grandTotal}* payment!\n\n` +
             `Thank you! 🙏`
           );
@@ -501,12 +411,16 @@ app.post('/webhook', async (req, res) => {
       }
 
       // ── GROQ AI HANDLES EVERYTHING ELSE ──
-      customer = await Customer.findOne({ phone: userPhone });
-      const customerContext = buildCustomerContext(customer);
+      customer = await Customer.findOne({
+        phone: userPhone
+      });
+      const customerContext =
+        buildCustomerContext(customer);
 
       const systemPrompt =
-`You are Niya, a friendly and professional sales assistant 
-for Ashirwad Shop. You sell stylish T-Shirts.
+`You are Niya, a friendly and professional 
+sales assistant for Ashirwad Shop.
+You sell stylish T-Shirts.
 
 CUSTOMER DATA:
 ${customerContext}
@@ -515,8 +429,8 @@ YOUR PERSONALITY:
 - Warm, friendly, and helpful
 - Speak only in simple English
 - Use emojis naturally but not too much
-- Keep very messages short and clear
-- maintain enough gap between lines so read properly
+- Keep messages short and clear
+- Always maintain proper gaps between lines
 - Never say you are an AI
 - Ask only one question at a time
 - Be patient and understanding
@@ -526,60 +440,62 @@ ${JSON.stringify(products)}
 
 CURRENT OFFERS:
 - Buy 2 T-Shirts = 10% discount
-- Buy 3 or more = 20% discount
+- Buy 3 or more T-Shirts = 20% discount
 
 SHIPPING:
-- Delivery charge: 99 rupees
-- Free delivery above 999 rupees
+- Delivery charge: ₹99
+- Free delivery above ₹999
 
 PAYMENT OPTIONS:
-- GPay / Paytm
+- GPay or Paytm
 - Cash on Delivery (COD)
 
-Shipping Address:
-- use this format 
-NAME - 
-HOUSE NO - 
-ADDRESS - 
-LANDMARK -  
-CITY - 
-PINCODE - 
-DISTRICT -
-STATE - 
-PHONE NO.-
-(check full address details are filled)
-
-Okay,We get your address but if we found any mistakes in your address than we will contact you again in 24h.
-
-Ending:
-- send full Bill again with payment information,Date and time
-- than say We Dispatch by tomorrow and you will receive your Parcel within 7 days
-
-Confirmation:
-- ask customer, Order Confirm ?
-- if order confirm than send Thank you for Visiting 😄 
-
-YOUR KNOWLEDGE:
-Size Chart:
+SIZE CHART:
 S  = 28-30 inches
-M  = 30-32 inches  
+M  = 30-32 inches
 L  = 32-34 inches
 XL = 34-36 inches
 
+BILL FORMAT - Always use this exact format:
+🧾 *Your Order Bill:*
+─────────────────
+
+*T-Shirt 1:*
+Code     : [code]
+Size     : [size]
+Colour   : [colour]
+Quantity : [qty]
+Price    : ₹[price]
+
+*T-Shirt 2:*
+Code     : [code]
+Size     : [size]
+Colour   : [colour]
+Quantity : [qty]
+Price    : ₹[price]
+
+(same for all selected t-shirts)
+
+─────────────────
+Total Price   : ₹[total]
+Shipping Cost : ₹[shipping or FREE]
+─────────────────
+*Grand Total  : ₹[grand total]*
+─────────────────
+
 IMPORTANT RULES:
-- Always be helpful and guide customer step by step
-- If customer asks about size in numbers, share the size chart
+- Always use the exact bill format above
+- Always maintain proper line gaps
+- If customer asks for bill, always send it
 - If customer seems confused, gently guide them
 - Never share competitor information
-- If customer is rude, stay calm and professional
-- Always confirm details before finalizing order
-- Always send Bill in Billing Format which i gaven you (everytime)
+- Stay calm if customer is rude
+- Always confirm all details before order
 
 YOUR JOB:
-Help customer complete their purchase naturally.
-The main flow is handled by the system automatically.
-Your job is to answer questions, handle confusion,
-and keep the conversation moving smoothly toward a sale.`;
+Help customer complete purchase naturally.
+Answer questions, handle confusion,
+keep conversation moving toward a sale.`;
 
       const recentHistory =
         customer.session.conversationHistory || [];
@@ -594,7 +510,6 @@ and keep the conversation moving smoothly toward a sale.`;
         systemPrompt
       );
 
-      // Clean reply
       const cleanReply = aiReply
         .replace(/update\w+:[^\n]*/gi, '')
         .trim();
@@ -615,23 +530,23 @@ and keep the conversation moving smoothly toward a sale.`;
     }
 
     // ── IMAGE MESSAGE HANDLER ──
-    // Customer sends payment screenshot
     if (messageType === 'image') {
       const customer2 = await Customer.findOne({
         phone: userPhone
       });
 
       if (customer2?.session?.stage === 'payment' &&
-          customer2?.session?.paymentMethod === 'online') {
+        customer2?.session?.paymentMethod === 'online') {
 
-        const grandTotal = customer2.session.grandTotal || 0;
+        const grandTotal =
+          customer2.session.grandTotal || 0;
 
         await updateCustomerSession(userPhone, {
           'session.stage': 'address'
         });
 
         await sendTextMessage(userPhone,
-          `✅ Okay! We received your ` +
+          `✅ Okay! We received your\n` +
           `*₹${grandTotal}* payment!\n\n` +
           `Thank you! 🙏`
         );
@@ -653,16 +568,15 @@ and keep the conversation moving smoothly toward a sale.`;
 
 // SEND WELCOME MESSAGE + SIZE BUTTONS
 async function sendWelcomeMessage(to) {
-  // First send welcome text
   await sendTextMessage(to,
     "Welcome to *Ashirwad Shop*! 👕\n\n" +
-    "Buy stylish T-Shirts from us!"
+    "Buy Stylish T-Shirts from us!"
   );
 
   await delay(500);
 
-  // Then send size buttons
   try {
+    // First 3 size buttons
     await axios.post(
       `https://graph.facebook.com/v18.0/${process.env.PHONE_NUMBER_ID}/messages`,
       {
@@ -702,7 +616,7 @@ async function sendWelcomeMessage(to) {
 
     await delay(500);
 
-    // Send XL and XXL as second button message
+    // XL and XXL buttons
     await axios.post(
       `https://graph.facebook.com/v18.0/${process.env.PHONE_NUMBER_ID}/messages`,
       {
@@ -736,7 +650,6 @@ async function sendWelcomeMessage(to) {
       }
     );
 
-    // Update stage
     await updateCustomerSession(to, {
       'session.stage': 'browsing'
     });
@@ -746,7 +659,7 @@ async function sendWelcomeMessage(to) {
   }
 }
 
-// SEND ALL PRODUCT IMAGES WITH CODE/COLOUR/PRICE
+// SEND ALL PRODUCT IMAGES
 async function sendAllProductImages(to, size) {
   await sendTextMessage(to,
     `Great! You selected Size *${size}* 👍\n\n` +
@@ -761,21 +674,86 @@ async function sendAllProductImages(to, size) {
       `Code: ${code}\n` +
       `Colour: ${product.color}\n` +
       `Price: ₹${product.price}`;
-
     await sendImageMessage(to, product.image_url, caption);
     await delay(600);
   }
 
   await delay(500);
   await sendTextMessage(to,
-    "⬆️ Send the *Code* of the T-Shirt " +
+    "⬆️ Send the *Code* of the T-Shirt\n" +
     "which you want to buy!\n\n" +
     "Example: *TS01*"
   );
 }
 
-// SEND FINAL BILL
-async function sendFinalBill(phone, customer, settings) {
+// BUILD BILL TEXT — used everywhere consistently
+function buildBillText(cart, orderTotal,
+  discountedTotal, discount, shippingCost, grandTotal) {
+
+  let bill = "🧾 *Your Order Bill:*\n";
+  bill += "─────────────────\n\n";
+
+  cart.forEach((item, index) => {
+    bill += `*T-Shirt ${index + 1}:*\n`;
+    bill += `Code     : ${item.code}\n`;
+    bill += `Size     : ${item.size}\n`;
+    bill += `Colour   : ${item.color}\n`;
+    bill += `Quantity : ${item.quantity}\n`;
+    bill += `Price    : ₹${item.totalPrice ||
+      item.pricePerItem}\n`;
+    bill += `\n`;
+  });
+
+  bill += `─────────────────\n`;
+
+  if (discount > 0) {
+    bill += `Original Price : ₹${orderTotal}\n`;
+    bill += `Discount       : -₹${discount.toFixed(0)}\n`;
+  }
+
+  bill += `Total Price   : ₹${discountedTotal.toFixed(0)}\n`;
+  bill += `Shipping Cost : ${shippingCost === 0
+    ? 'FREE 🎉'
+    : '₹' + shippingCost}\n`;
+  bill += `─────────────────\n`;
+  bill += `*Grand Total  : ₹${grandTotal.toFixed(0)}*\n`;
+  bill += `─────────────────`;
+
+  return bill;
+}
+
+// SEND BILL MESSAGE — called anytime bill needed
+async function sendBillMessage(phone, customer) {
+  const cart = customer.session.cart || [];
+  if (cart.length === 0) return;
+
+  let orderTotal = 0;
+  cart.forEach(item => {
+    orderTotal += item.totalPrice || item.pricePerItem;
+  });
+
+  let discount = 0;
+  if (cart.length === 2) discount = orderTotal * 0.10;
+  if (cart.length >= 3) discount = orderTotal * 0.20;
+  const discountedTotal = orderTotal - discount;
+
+  const shippingCost =
+    customer.session.deliveryCharge !== undefined
+      ? customer.session.deliveryCharge
+      : discountedTotal >= 999 ? 0 : 99;
+
+  const grandTotal = discountedTotal + shippingCost;
+
+  const bill = buildBillText(
+    cart, orderTotal, discountedTotal,
+    discount, shippingCost, grandTotal
+  );
+
+  await sendTextMessage(phone, bill);
+}
+
+// SEND FINAL BILL + PAYMENT BUTTONS
+async function sendFinalBill(phone, customer) {
   const cart = customer.session.cart || [];
 
   if (cart.length === 0) {
@@ -791,23 +769,15 @@ async function sendFinalBill(phone, customer, settings) {
     orderTotal += item.totalPrice || item.pricePerItem;
   });
 
-  // Apply discounts
   let discount = 0;
   if (cart.length === 2) discount = orderTotal * 0.10;
   if (cart.length >= 3) discount = orderTotal * 0.20;
   const discountedTotal = orderTotal - discount;
 
-  // Shipping
-  let shippingCost = 99;
-  if (settings?.freeShipping) {
-    shippingCost = 0;
-  } else if (discountedTotal >= (settings?.freeShippingAbove || 999)) {
-    shippingCost = 0;
-  }
-
+  let shippingCost = discountedTotal >= 999 ? 0 : 99;
   const grandTotal = discountedTotal + shippingCost;
 
-  // Save totals
+  // Save totals to DB
   await updateCustomerSession(phone, {
     'session.orderTotal': discountedTotal,
     'session.deliveryCharge': shippingCost,
@@ -815,37 +785,16 @@ async function sendFinalBill(phone, customer, settings) {
     'session.stage': 'confirmed'
   });
 
-  // Build bill
-  let bill = "🧾 *Your Order Bill:*\n";
-  bill += "─────────────────\n\n";
-
-  cart.forEach((item, index) => {
-    bill += `*T-Shirt ${index + 1}:*\n`;
-    bill += `Code     : ${item.code}\n`;
-    bill += `Size     : ${item.size}\n`;
-    bill += `Colour   : ${item.color}\n`;
-    bill += `Quantity : ${item.quantity}\n`;
-    bill += `Price    : ₹${item.totalPrice || item.pricePerItem}\n`;
-    bill += `\n`;
-  });
-
-  bill += `─────────────────\n`;
-
-  if (discount > 0) {
-    bill += `Original  : ₹${orderTotal}\n`;
-    bill += `Discount  : -₹${discount.toFixed(0)}\n`;
-  }
-
-  bill += `Total Price  : ₹${discountedTotal.toFixed(0)}\n`;
-  bill += `Shipping Cost: ${shippingCost === 0 ? 'FREE 🎉' : '₹' + shippingCost}\n`;
-  bill += `─────────────────\n`;
-  bill += `*Grand Total : ₹${grandTotal.toFixed(0)}*\n`;
-  bill += `─────────────────`;
+  // Build and send bill
+  const bill = buildBillText(
+    cart, orderTotal, discountedTotal,
+    discount, shippingCost, grandTotal
+  );
 
   await sendTextMessage(phone, bill);
   await delay(800);
 
-  // Ask payment method
+  // Send payment method buttons
   try {
     await axios.post(
       `https://graph.facebook.com/v18.0/${process.env.PHONE_NUMBER_ID}/messages`,
@@ -862,11 +811,17 @@ async function sendFinalBill(phone, customer, settings) {
             buttons: [
               {
                 type: 'reply',
-                reply: { id: 'pay_gpay', title: '💳 GPay/Paytm' }
+                reply: {
+                  id: 'pay_gpay',
+                  title: '💳 GPay/Paytm'
+                }
               },
               {
                 type: 'reply',
-                reply: { id: 'pay_cod', title: '💵 Cash on Delivery' }
+                reply: {
+                  id: 'pay_cod',
+                  title: '💵 Cash on Delivery'
+                }
               }
             ]
           }
@@ -887,16 +842,16 @@ async function sendFinalBill(phone, customer, settings) {
 // SEND ADDRESS REQUEST
 async function sendAddressRequest(phone) {
   await sendTextMessage(phone,
-    "📦 Please send your *Shipping Address* " +
+    "📦 Please send your *Shipping Address*\n" +
     "in this format:\n\n" +
-    "NAME -\n" +
-    "HOUSE NO -\n" +
-    "ADDRESS -\n" +
-    "LANDMARK -\n" +
-    "CITY -\n" +
-    "PINCODE -\n" +
-    "DISTRICT -\n" +
-    "STATE -\n" +
+    "NAME -\n\n" +
+    "HOUSE NO -\n\n" +
+    "ADDRESS -\n\n" +
+    "LANDMARK -\n\n" +
+    "CITY -\n\n" +
+    "PINCODE -\n\n" +
+    "DISTRICT -\n\n" +
+    "STATE -\n\n" +
     "PHONE NO -"
   );
 }
@@ -948,22 +903,26 @@ function buildCustomerContext(customer) {
   }
 
   context += `Phone: ${customer.phone}\n`;
-  context += `Current Stage: ${customer.session.stage}\n`;
+  context += `Stage: ${customer.session.stage}\n`;
 
   if (customer.session.selectedSize) {
     context += `Selected Size: ${customer.session.selectedSize}\n`;
   }
 
   if (customer.session.cart?.length > 0) {
-    context += `\nCURRENT CART (${customer.session.cart.length} items):\n`;
+    context += `\nCURRENT CART `;
+    context += `(${customer.session.cart.length} items):\n`;
     customer.session.cart.forEach(item => {
       context += `- ${item.code}: ${item.name} `;
-      context += `${item.color} Size:${item.size} `;
+      context += `${item.color} `;
+      context += `Size:${item.size} `;
       context += `Qty:${item.quantity} `;
       context += `₹${item.totalPrice}\n`;
     });
-    context += `Order Total: ₹${customer.session.orderTotal}\n`;
-    context += `Grand Total: ₹${customer.session.grandTotal}\n`;
+    context +=
+      `Order Total: ₹${customer.session.orderTotal}\n`;
+    context +=
+      `Grand Total: ₹${customer.session.grandTotal}\n`;
   }
 
   if (customer.session.deliveryAddress) {
@@ -1075,12 +1034,15 @@ async function getGroqReply(history, systemPrompt) {
       const text = msg.parts[0].text;
       if (!text || text.trim() === '') return;
       messages.push({
-        role: msg.role === 'model' ? 'assistant' : 'user',
+        role: msg.role === 'model'
+          ? 'assistant'
+          : 'user',
         content: text
       });
     });
 
-    console.log('Sending to Groq:', messages.length, 'messages');
+    console.log('Sending to Groq:',
+      messages.length, 'messages');
 
     const response = await axios.post(
       'https://api.groq.com/openai/v1/chat/completions',
@@ -1112,10 +1074,14 @@ async function getGroqReply(history, systemPrompt) {
 
 // DELAY HELPER
 function delay(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise(
+    resolve => setTimeout(resolve, ms)
+  );
 }
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`GlassChat server running on port ${PORT}`);
+  console.log(
+    `GlassChat server running on port ${PORT}`
+  );
 });
