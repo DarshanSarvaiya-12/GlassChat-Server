@@ -85,7 +85,7 @@ app.post('/webhook', async (req, res) => {
           "GPay / Paytm Number:\n" +
           `*${process.env.PAYMENT_NUMBER || '9999999999'}*\n\n` +
           "Please send the exact amount and\n" +
-          "after payment send screenshot here! 📸"
+          "after payment send screenshot here!"
         );
         return res.sendStatus(200);
       }
@@ -194,12 +194,12 @@ app.post('/webhook', async (req, res) => {
         lowerText.includes('measurement') ||
         lowerText.includes('inch')) {
         await sendTextMessage(userPhone,
-          "📏 *Size Chart:*\n\n" +
-          "S  = 28 - 30 inches\n\n" +
-          "M  = 30 - 32 inches\n\n" +
-          "L  = 32 - 34 inches\n\n" +
+          "📏 *Size Chart:*\n" +
+          "S  = 28 - 30 inches\n" +
+          "M  = 30 - 32 inches\n" +
+          "L  = 32 - 34 inches\n" +
           "XL = 34 - 36 inches\n\n" +
-          "Which size would you like? 😊"
+          "Which size would you like ? 😊"
         );
         return res.sendStatus(200);
       }
@@ -281,7 +281,7 @@ app.post('/webhook', async (req, res) => {
             "Now select the next T-Shirt " +
             "which you want to buy.\n\n" +
             "Reply *Yes* to select more\n\n" +
-            "Reply *No* if you are done"
+            "Reply *No* if you are Done"
           );
           return res.sendStatus(200);
         }
@@ -857,16 +857,15 @@ async function sendFinalBill(phone, customer) {
 // SEND ADDRESS REQUEST
 async function sendAddressRequest(phone) {
   await sendTextMessage(phone,
-    "📦 Please send your *Shipping Address*\n" +
-    "in this format:\n\n" +
-    "NAME -\n\n" +
-    "HOUSE NO -\n\n" +
-    "ADDRESS -\n\n" +
-    "LANDMARK -\n\n" +
-    "CITY -\n\n" +
-    "PINCODE -\n\n" +
-    "DISTRICT -\n\n" +
-    "STATE -\n\n" +
+    "📦 Please send your *Shipping Address* in this format:\n\n" +
+    "NAME -\n" +
+    "HOUSE NO -\n" +
+    "ADDRESS -\n" +
+    "LANDMARK -\n" +
+    "CITY -\n" +
+    "PINCODE -\n" +
+    "DISTRICT -\n" +
+    "STATE -\n" +
     "PHONE NO -"
   );
 }
