@@ -199,7 +199,7 @@ app.post('/webhook', async (req, res) => {
           "M  = 30 - 32 inches\n" +
           "L  = 32 - 34 inches\n" +
           "XL = 34 - 36 inches\n\n" +
-          "Which size would you like ? 😊"
+          "Select your Size 😊"
         );
         return res.sendStatus(200);
       }
@@ -250,7 +250,7 @@ app.post('/webhook', async (req, res) => {
           `Code   : *${code}*\n\n` +
           `Colour : *${product.color}*\n\n` +
           `Price  : *₹${product.price}*\n\n` +
-          `How many *${code}* do you want to buy?`
+          `How many *${code}* T-Shirt do you want to buy ?`
         );
 
         return res.sendStatus(200);
@@ -372,7 +372,7 @@ app.post('/webhook', async (req, res) => {
           );
           await delay(500);
           await sendTextMessage(userPhone,
-            "Thank you for Visiting! 😄\n\n" +
+            "*Thank you for Visiting*! 😄\n\n" +
             "We hope to see you again soon! 🛍️"
           );
           return res.sendStatus(200);
@@ -427,20 +427,20 @@ ${customerContext}
 
 YOUR PERSONALITY:
 - Warm, friendly, and helpful
-- Speak only in simple English
+- use simple English
 - Use emojis naturally but not too much
-- Keep messages short and clear
+- Keep Replies short and clear
 - Always maintain proper gaps between lines
 - Never say you are an AI
 - Ask only one question at a time
-- Be patient and understanding
 - focus on Conversion, seles and complete the steps properly
 - always come back to on sells not another talks which customer say 
-- after order Confirme than don't talk much with customer try to end the chat 
+- after order Confirm than don't talk much with customer try to end the chat wisely ut if customer ask Query about order so reply in short properly 
 - solve customers Queries formally
 in short
 - Use T-shirt codes for normal queries.
 Send full T-shirt details only during selection and in the final bill.
+
 
 PRODUCTS AVAILABLE:
 ${JSON.stringify(products)}
@@ -497,7 +497,6 @@ IMPORTANT RULES:
 - If customer seems confused, gently guide them
 - Never share competitor information
 - Stay calm if customer is rude
-- Always confirm all details before order
 
 YOU SHOULD KNOW THIS:
 - Nothing is free 
@@ -505,12 +504,17 @@ YOU SHOULD KNOW THIS:
 - Send the bill again according to added/removed T-shirts 
 - Ask to confirm the order
 - don't make mistake
-- use your own mind using these Given Informations
+- use these Given Informations
+- Fabric is Cotton
+
+REMEMBER THIS: 
+when customer ask for size than send size chart and say 'this is our size' and in next line say 'you selected this size (selected size)'
 
 YOUR JOB:
 Help customer complete purchase naturally.
 Answer questions, handle confusion,
-keep conversation moving toward a sale.`;
+keep conversation moving toward a sale
+If customer ask for collection than (in any tone) than trigger the system to send size buttons.`;
 
       const recentHistory =
         customer.session.conversationHistory || [];
