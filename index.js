@@ -55,6 +55,16 @@ app.post('/webhook', async (req, res) => {
         message.interactive?.button_reply?.id;
       console.log(`Button: ${buttonId}`);
 
+      // BLOCK ALL BUTTONS IF ORDER COMPLETED
+      if (customer.session.stage === 'completed') {
+        await sendTextMessage(userPhone,
+          "✅ Your order is already confirmed.\n\n" +
+          "No changes can be made after confirmation.\n\n" +
+          "If you have any questions, feel free to ask!"
+        );
+        return res.sendStatus(200);
+      }
+
       // SIZE BUTTONS
       if (['size_s', 'size_m', 'size_l',
         'size_xl', 'size_xxl'].includes(buttonId)) {
@@ -74,29 +84,64 @@ app.post('/webhook', async (req, res) => {
       }
 
       // PAYMENT METHOD BUTTONS
+      // Block if payment already selected
       if (buttonId === 'pay_gpay' ||
-        buttonId === 'pay_paytm') {
-        await updateCustomerSession(userPhone, {
-          'session.paymentMethod': 'online',
-          'session.stage': 'payment'
-        });
-        await sendTextMessage(userPhone,
-          "✅ *Payment Details:*\n\n" +
-          "GPay / Paytm Number:\n" +
-          `*${process.env.PAYMENT_NUMBER || '9999999999'}*\n\n` +
-          "Please send the exact amount and\n" +
-          "after payment send screenshot here! 📸"
-        );
-        return res.sendStatus(200);
-      }
+        buttonId === 'pay_paytm' ||
+        buttonId === 'pay_cod') {
 
-      if (buttonId === 'pay_cod') {
-        await updateCustomerSession(userPhone, {
-          'session.paymentMethod': 'cod',
-          'session.stage': 'address'
-        });
-        await sendAddressRequest(userPhone);
-        return res.sendStatus(200);
+        // If payment already selected — block
+        if (customer.session.paymentMethod) {
+          await sendTextMessage(userPhone,
+            "⚠️ Payment method already selected.\n\n" +
+            "Please complete your current payment."
+          );
+          return res.sendStatus(200);
+        }
+
+        // Block if order already confirmed
+        if (customer.session.stage === 'completed' ||
+          customer.session.stage === 'confirming' ||
+          customer.session.stage === 'address') {
+          await sendTextMessage(userPhone,
+            "⚠️ Your order is already in progress.\n\n" +
+            "No changes allowed at this stage."
+          );
+          return res.sendStatus(200);
+        }
+
+        if (buttonId === 'pay_gpay' ||
+          buttonId === 'pay_paytm') {
+          await updateCustomerSession(userPhone, {
+            'session.paymentMethod': 'online',
+            'session.stage': 'payment'
+          });
+
+          // Refresh customer for grand total
+          customer = await Customer.findOne({
+            phone: userPhone
+          });
+          const grandTotal =
+            customer.session.grandTotal || 0;
+
+          await sendTextMessage(userPhone,
+            "✅ *Payment Details:*\n\n" +
+            "GPay / Paytm Number:\n" +
+            `*${process.env.PAYMENT_NUMBER || '9999999999'}*\n\n` +
+            `Amount to Pay: *₹${grandTotal}*\n\n` +
+            "Please send the exact amount and\n" +
+            "after payment send screenshot here! 📸"
+          );
+          return res.sendStatus(200);
+        }
+
+        if (buttonId === 'pay_cod') {
+          await updateCustomerSession(userPhone, {
+            'session.paymentMethod': 'cod',
+            'session.stage': 'address'
+          });
+          await sendAddressRequest(userPhone);
+          return res.sendStatus(200);
+        }
       }
 
       return res.sendStatus(200);
@@ -111,6 +156,63 @@ app.post('/webhook', async (req, res) => {
       customer = await Customer.findOne({
         phone: userPhone
       });
+
+      // ── BLOCK ALL CHANGES AFTER ORDER CONFIRMED ──
+      if (customer.session.stage === 'completed') {
+        // Only allow support questions via Groq
+        const customerContext =
+          buildCustomerContext(customer);
+
+        const supportPrompt =
+`You are Niya, a friendly support assistant at Ashirwad Shop.
+The customer's order is already CONFIRMED and COMPLETED.
+No changes, cancellations, or modifications are allowed.
+
+CUSTOMER DATA:
+${customerContext}
+
+SUPPORT RULES:
+- Order is confirmed — NO changes allowed under any circumstances
+- If customer asks to change order — politely refuse
+- If customer asks to cancel — politely refuse
+- Parcel not received → "Your parcel arrives in 5-7 days. Please wait!"
+- Damaged product → "Please send us the unboxing video for confirmation."
+- Any complaint → Listen, apologize, guide next step
+- Keep replies short, calm, and helpful
+- End with: "If you have any questions, feel free to ask!"
+
+STRICT: Do NOT process any new orders, changes, or payment in this mode.`;
+
+        const recentHistory =
+          customer.session.conversationHistory || [];
+        recentHistory.push({
+          role: 'user',
+          parts: [{ text: userText }]
+        });
+
+        const supportReply = await getGroqReply(
+          recentHistory, supportPrompt
+        );
+
+        const cleanSupport = supportReply
+          .replace(/REMOVE_ITEM:\w+/gi, '')
+          .replace(/UPDATE_QTY:\w+:\d+/gi, '')
+          .replace(/SEND_SIZE_BUTTONS/gi, '')
+          .trim();
+
+        recentHistory.push({
+          role: 'model',
+          parts: [{ text: cleanSupport }]
+        });
+
+        await updateCustomerSession(userPhone, {
+          'session.conversationHistory':
+            recentHistory.slice(-50)
+        });
+
+        await sendTextMessage(userPhone, cleanSupport);
+        return res.sendStatus(200);
+      }
 
       // ── NEW CUSTOMER ──
       if (customer.session.stage === 'new') {
@@ -187,6 +289,23 @@ app.post('/webhook', async (req, res) => {
 
       const lowerText = userText.toLowerCase();
 
+      // ── COLLECTION TRIGGER ──
+      // Only trigger on exact phrase "send me collection"
+      if (lowerText === 'send me collection') {
+        // Reset cart for new selection
+        await updateCustomerSession(userPhone, {
+          'session.cart': [],
+          'session.selectedSize': null,
+          'session.pendingCode': null,
+          'session.stage': 'browsing',
+          'session.paymentMethod': null,
+          'session.orderTotal': 0,
+          'session.grandTotal': 0
+        });
+        await sendSizeButtons(userPhone);
+        return res.sendStatus(200);
+      }
+
       // ── SIZE CHART REQUEST ──
       if (lowerText.includes('size in number') ||
         lowerText.includes('size chart') ||
@@ -204,11 +323,24 @@ app.post('/webhook', async (req, res) => {
         return res.sendStatus(200);
       }
 
-      // ── DETECT PRODUCT CODE SELECTION ──
+      // ── DETECT PRODUCT CODES ──
+      // Handle multiple codes in one message
       const detectedCodes = detectProductCodes(userText);
+
       if (detectedCodes.length > 0 &&
         customer.session.stage === 'browsing') {
 
+        // Handle multiple codes one by one
+        if (detectedCodes.length > 1) {
+          // Save all codes as pending queue
+          await updateCustomerSession(userPhone, {
+            'session.pendingCodes': detectedCodes.slice(1),
+            'session.stage': 'quantity',
+            'session.pendingCode': detectedCodes[0]
+          });
+        }
+
+        // Process first code
         const code = detectedCodes[0];
         const product = products[code];
 
@@ -236,7 +368,7 @@ app.post('/webhook', async (req, res) => {
           `Code   : *${code}*\n\n` +
           `Colour : *${product.color}*\n\n` +
           `Price  : *₹${product.price}*\n\n` +
-          `*How many ${code}* T-Shirt do you want to buy?`
+          `*How many ${code}* T-Shirts do you want?`
         );
 
         return res.sendStatus(200);
@@ -256,9 +388,49 @@ app.post('/webhook', async (req, res) => {
             return item;
           });
 
+          // Check if more codes pending
+          const pendingCodes =
+            customer.session.pendingCodes || [];
+
+          if (pendingCodes.length > 0) {
+            // Process next pending code
+            const nextCode = pendingCodes[0];
+            const nextProduct = products[nextCode];
+            const remainingCodes = pendingCodes.slice(1);
+
+            cart.push({
+              code: nextCode,
+              name: nextProduct.name,
+              color: nextProduct.color,
+              size: customer.session.selectedSize || 'M',
+              pricePerItem: nextProduct.price,
+              quantity: 1,
+              totalPrice: nextProduct.price
+            });
+
+            await updateCustomerSession(userPhone, {
+              'session.cart': cart,
+              'session.pendingCode': nextCode,
+              'session.pendingCodes': remainingCodes,
+              'session.stage': 'quantity'
+            });
+
+            await sendTextMessage(userPhone,
+              "✅ *Nice Choice!*\n\n" +
+              `You Selected:\n\n` +
+              `Code   : *${nextCode}*\n\n` +
+              `Colour : *${nextProduct.color}*\n\n` +
+              `Price  : *₹${nextProduct.price}*\n\n` +
+              `*How many ${nextCode}* T-Shirts do you want?`
+            );
+            return res.sendStatus(200);
+          }
+
+          // No more pending codes
           await updateCustomerSession(userPhone, {
             'session.cart': cart,
             'session.pendingCode': null,
+            'session.pendingCodes': [],
             'session.stage': 'browsing'
           });
 
@@ -266,7 +438,8 @@ app.post('/webhook', async (req, res) => {
             "Okay! 👍\n\n" +
             "Would you like to select another T-Shirt?\n\n" +
             "Reply *Yes* to select more\n\n" +
-            "Reply *No* if you are Done"
+            "Reply *No* if you are Done\n\n" +
+            "Or for new collection reply: *Send Me Collection*"
           );
           return res.sendStatus(200);
         }
@@ -362,9 +535,9 @@ app.post('/webhook', async (req, res) => {
             phone: userPhone
           });
 
-          // Send Final Bill
+          // Send Final Bill with date/time
           await sendFinalBill(userPhone, customer);
-          await delay(600);
+          await delay(800);
 
           await sendTextMessage(userPhone,
             "If you have any questions, feel free to ask!\n\n" +
@@ -424,9 +597,8 @@ ${customerContext}
 YOUR PERSONALITY:
 - Talk like a warm, helpful shopkeeper
 - Use simple English only
-- Keep replies ultra short and clear
-- only 3 lines in one Reply
-- this is WhatsApp, not email
+- Keep replies short — maximum 3 lines
+- This is WhatsApp not email
 - Use emojis naturally, not excessively
 - Never reveal you are an AI
 - Ask only ONE question at a time
@@ -467,105 +639,55 @@ RETURN POLICY:
 - Nothing is free
 
 ━━━━━━━━━━━━━
-HOW TO HANDLE DIFFERENT SITUATIONS:
+HOW TO HANDLE SITUATIONS:
 ━━━━━━━━━━━━━
 
 SITUATION 1 — NEW ORDER:
-Customer wants to buy T-Shirts.
-Guide them step by step:
-1. They select size (size buttons sent automatically)
-2. They see collection photos (sent automatically)
-3. They send product code like TS01
-4. You confirm their selection and ask quantity
-5. Ask if they want more T-Shirts
-6. When done, system sends Purchase Bill automatically
-7. Customer selects payment method
-8. After payment confirmed, system asks for delivery address
-9. After address, customer confirms order
-10. System sends Final Bill automatically
+Guide customer step by step:
+1. Size selection (buttons sent automatically)
+2. Collection photos (sent automatically)
+3. Customer sends product code
+4. System handles selection, quantity, bill
+5. Customer selects payment
+6. After payment, system asks address
+7. Customer confirms — system sends Final Bill
 
-SITUATION 2 — CUSTOMER WANTS TO ADD MORE T-SHIRTS:
-If customer says "I want to add one more" or "add TS02 also":
-- Say "Sure! Send the code of the T-Shirt you want to add!"
-- After they send code, system adds it to cart automatically
-- Then ask quantity
-- Then system sends updated Purchase Bill
+SITUATION 2 — CUSTOMER WANTS TO ADD MORE:
+- Say "Sure! Send the code of T-Shirt to add!"
+- System adds it automatically
 
-SITUATION 3 — CUSTOMER WANTS TO REMOVE A T-SHIRT:
-If customer says "remove TS01" or "I don't want TS01":
-- Say "Okay! I have removed TS01 from your order."
-- Use tag: REMOVE_ITEM:[code] at end of reply
-- System will remove it and show updated bill
+SITUATION 3 — CUSTOMER WANTS TO REMOVE:
+- Say "Okay! I have removed [code] from your order."
+- Use tag: REMOVE_ITEM:[code]
 
 SITUATION 4 — CUSTOMER WANTS TO CHANGE QUANTITY:
-If customer says "change TS01 quantity to 3":
-- Say "Sure! Updated TS01 quantity to 3."
-- Use tag: UPDATE_QTY:[code]:[new_qty] at end of reply
-- System updates cart and shows updated bill
+- Say "Sure! Updated [code] quantity to [qty]."
+- Use tag: UPDATE_QTY:[code]:[new_qty]
 
-SITUATION 5 — CUSTOMER ASKS ABOUT SIZE:
+SITUATION 5 — SIZE QUESTION:
 - Share size chart
-- Then remind: "You selected size [their selected size]"
-- If they want to change size, use tag: SEND_SIZE_BUTTONS
+- Remind: "You selected size [size]"
 
-SITUATION 6 — CUSTOMER ASKS TO SEE COLLECTION OR PRODUCTS:
-- In any tone, if customer asks to see products, photos,
-  collection, T-shirts — use tag: SEND_SIZE_BUTTONS
-- System will send size selection buttons automatically
+SITUATION 6 — CUSTOMER WANTS TO SEE COLLECTION OR PLACE NEW ORDER:
+- NEVER send SEND_SIZE_BUTTONS directly
+- Always say exactly this:
+  "For our new Collection
+  Reply: *Send Me Collection*"
+- Customer must type "Send Me Collection" to trigger
 
-SITUATION 7 — CUSTOMER CONFUSED OR STUCK:
-- Gently guide them back to where they were
-- "No problem! You were selecting T-Shirts. Want to continue?"
+SITUATION 7 — CUSTOMER CONFUSED:
+- Gently guide back: "No problem! Want to continue selecting?"
 
 SITUATION 8 — CUSTOMER IS RUDE:
-- Stay calm and professional always
-- "I understand your concern. Let me help you!"
+- Stay calm: "I understand! Let me help you!"
 
-SITUATION 9 — AFTER ORDER IS CONFIRMED (Support Mode):
-- Parcel not received → "Your parcel will arrive in 5-7 days. Please wait!"
-- Want to track → "Let me check. Your order is on the way!"
-- Damaged product → "I am really sorry! Please send us the opening parcel video for confirmation."
-- Any complaint → Listen first, apologize, then guide next step
-- Keep replies calm, helpful and short
-
-SITUATION 10 — CUSTOMER WANTS NEW ORDER:
-- Say "Happy to help with a new order!"
-- Use tag: SEND_SIZE_BUTTONS
-- System will restart selection flow
+SITUATION 9 — AFTER ORDER CONFIRMED:
+- NO changes, NO new orders in same chat
+- Support only: tracking, complaints, damaged items
 
 ━━━━━━━━━━━━━
-PURCHASE BILL FORMAT — Send BEFORE payment:
-━━━━━━━━━━━━━
-
-🧾 *Purchase Bill:*
-─────────────────
-
-*T-Shirt 1:*
-Code     : [code]
-Size     : [size]
-Colour   : [colour]
-Quantity : [qty]
-Price    : ₹[price]
-
-*T-Shirt 2:*
-Code     : [code]
-Size     : [size]
-Colour   : [colour]
-Quantity : [qty]
-Price    : ₹[price]
-
-(repeat for all T-Shirts)
-
-─────────────────
-Total Price   : ₹[total without shipping]
-Shipping Cost : [₹99 or FREE 🎉]
-─────────────────
-*Grand Total  : ₹[final amount]*
-─────────────────
-
-━━━━━━━━━━━━━
-IMPORTANT TAGS — ADD AT END OF REPLY ONLY:
-Customer will NEVER see these tags.
+IMPORTANT TAGS — END OF REPLY ONLY:
+Customer will NEVER see these.
 ━━━━━━━━━━━━━
 
 REMOVE_ITEM:[code]
@@ -574,21 +696,17 @@ REMOVE_ITEM:[code]
 UPDATE_QTY:[code]:[new_quantity]
 → Change quantity of a T-Shirt
 
-SEND_SIZE_BUTTONS
-→ Send size selection buttons to customer
-
 ━━━━━━━━━━━━━
 STRICT RULES:
 ━━━━━━━━━━━━━
-- NEVER trigger bill by just words in message
+- NEVER use bill, order, total, summary words to trigger bill
 - NEVER make up product codes or prices
 - NEVER promise free things
 - NEVER discuss competitors
 - ALWAYS maintain gaps between lines
-- For casual replies, use only product CODE
-- Full product details only during selection and in bill
 - Name and address must always be in English
-- End support chat: "If you have any questions, feel free to ask!
+- After order confirmed: support mode only, NO changes
+- End support: "If you have any questions, feel free to ask!
 
 *Thank you for Visiting!* 😄"`;
 
@@ -643,11 +761,6 @@ STRICT RULES:
         console.log(`Updated ${updateCode} qty to ${newQty}`);
       }
 
-      // Parse SEND_SIZE_BUTTONS tag
-      if (aiReply.includes('SEND_SIZE_BUTTONS')) {
-        await sendSizeButtons(userPhone);
-      }
-
       // Clean all tags from reply
       const cleanReply = aiReply
         .replace(/REMOVE_ITEM:\w+/gi, '')
@@ -662,8 +775,8 @@ STRICT RULES:
         parts: [{ text: cleanReply }]
       });
 
-      // Keep last 4 messages = 2 exchanges
-      const trimmedHistory = recentHistory.slice(-4);
+      // Keep last 50 messages = 25 exchanges
+      const trimmedHistory = recentHistory.slice(-50);
 
       await updateCustomerSession(userPhone, {
         'session.conversationHistory': trimmedHistory
@@ -679,6 +792,11 @@ STRICT RULES:
       const customer2 = await Customer.findOne({
         phone: userPhone
       });
+
+      // Block if order completed
+      if (customer2?.session?.stage === 'completed') {
+        return res.sendStatus(200);
+      }
 
       if (customer2?.session?.stage === 'payment' &&
         customer2?.session?.paymentMethod === 'online') {
@@ -836,10 +954,11 @@ async function sendAllProductImages(to, size) {
 }
 
 // BUILD BILL TEXT — base function
-function buildBillText(cart, orderTotal,
-  discountedTotal, discount, shippingCost,
-  grandTotal, billType, confirmDateTime) {
-
+function buildBillText(
+  cart, orderTotal, discountedTotal,
+  discount, shippingCost, grandTotal,
+  billType, confirmDateTime
+) {
   const title = billType === 'final'
     ? "🧾 *Final Bill:*"
     : "🧾 *Purchase Bill:*";
@@ -877,7 +996,8 @@ function buildBillText(cart, orderTotal,
   if (billType === 'final' && confirmDateTime) {
     bill += `\n\n`;
     bill += `─────────────────\n`;
-    bill += `Order Confirmed : ${confirmDateTime}\n`;
+    bill += `Order Confirmed :\n`;
+    bill += `${confirmDateTime}\n`;
     bill += `─────────────────`;
   }
 
@@ -898,7 +1018,10 @@ function calculateTotals(cart) {
   const shippingCost = discountedTotal >= 999 ? 0 : 99;
   const grandTotal = discountedTotal + shippingCost;
 
-  return { orderTotal, discount, discountedTotal, shippingCost, grandTotal };
+  return {
+    orderTotal, discount,
+    discountedTotal, shippingCost, grandTotal
+  };
 }
 
 // SEND PURCHASE BILL — before payment
@@ -983,7 +1106,6 @@ async function sendPurchaseBill(phone, customer) {
 // SEND FINAL BILL — after order confirmed
 async function sendFinalBill(phone, customer) {
   const cart = customer.session.cart || [];
-
   if (cart.length === 0) return;
 
   const {
@@ -991,7 +1113,7 @@ async function sendFinalBill(phone, customer) {
     shippingCost, grandTotal
   } = calculateTotals(cart);
 
-  // Get current date and time in India format
+  // India date/time format
   const now = new Date();
   const confirmDateTime = now.toLocaleString('en-IN', {
     timeZone: 'Asia/Kolkata',
@@ -1016,7 +1138,7 @@ async function sendFinalBill(phone, customer) {
 async function sendAddressRequest(phone) {
   await sendTextMessage(phone,
     "📦 Please send your *Shipping Address*\n" +
-    "in this format (in English only):\n\n" +
+    "in this format *(in English only)*:\n\n" +
     "NAME -\n\n" +
     "HOUSE NO -\n\n" +
     "ADDRESS -\n\n" +
