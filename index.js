@@ -85,7 +85,7 @@ app.post('/webhook', async (req, res) => {
           "GPay / Paytm Number:\n" +
           `*${process.env.PAYMENT_NUMBER || '9999999999'}*\n\n` +
           "Please send the exact amount and\n" +
-          "after payment send screenshot here!"
+          "after payment send screenshot here! 📸"
         );
         return res.sendStatus(200);
       }
@@ -137,7 +137,7 @@ app.post('/webhook', async (req, res) => {
         await sendTextMessage(userPhone,
           "👋 *Welcome back!*\n\n" +
           "Do you want to:\n\n" +
-          "*1* - Continue previous conversation\n" +
+          "*1* - Continue previous conversation\n\n" +
           "*2* - Start new conversation"
         );
         await Customer.findOneAndUpdate(
@@ -194,28 +194,14 @@ app.post('/webhook', async (req, res) => {
         lowerText.includes('measurement') ||
         lowerText.includes('inch')) {
         await sendTextMessage(userPhone,
-          "📏 *Size Chart:*\n" +
-          "S  = 28 - 30 inches\n" +
-          "M  = 30 - 32 inches\n" +
-          "L  = 32 - 34 inches\n" +
+          "📏 *Size Chart:*\n\n" +
+          "S  = 28 - 30 inches\n\n" +
+          "M  = 30 - 32 inches\n\n" +
+          "L  = 32 - 34 inches\n\n" +
           "XL = 34 - 36 inches\n\n" +
-          "Select your Size 😊"
+          "Which size would you like? 😊"
         );
         return res.sendStatus(200);
-      }
-
-      // ── BILL REQUEST ──
-      if (lowerText.includes('bill') ||
-        lowerText.includes('order') ||
-        lowerText.includes('summary') ||
-        lowerText.includes('total')) {
-        customer = await Customer.findOne({
-          phone: userPhone
-        });
-        if (customer.session.cart?.length > 0) {
-          await sendBillMessage(userPhone, customer);
-          return res.sendStatus(200);
-        }
       }
 
       // ── DETECT PRODUCT CODE SELECTION ──
@@ -250,7 +236,7 @@ app.post('/webhook', async (req, res) => {
           `Code   : *${code}*\n\n` +
           `Colour : *${product.color}*\n\n` +
           `Price  : *₹${product.price}*\n\n` +
-          `How many *${code}* T-Shirt do you want to buy ?`
+          `How many *${code}* T-Shirt do you want to buy?`
         );
 
         return res.sendStatus(200);
@@ -278,8 +264,7 @@ app.post('/webhook', async (req, res) => {
 
           await sendTextMessage(userPhone,
             "Okay! 👍\n\n" +
-            "Now select the next T-Shirt " +
-            "which you want to buy.\n\n" +
+            "Would you like to select another T-Shirt?\n\n" +
             "Reply *Yes* to select more\n\n" +
             "Reply *No* if you are Done"
           );
@@ -311,7 +296,7 @@ app.post('/webhook', async (req, res) => {
           customer = await Customer.findOne({
             phone: userPhone
           });
-          await sendFinalBill(userPhone, customer);
+          await sendPurchaseBill(userPhone, customer);
           return res.sendStatus(200);
         }
       }
@@ -370,10 +355,20 @@ app.post('/webhook', async (req, res) => {
           await sendTextMessage(userPhone,
             "🎉 *Your Order is Confirmed!*"
           );
-          await delay(500);
+          await delay(600);
+
+          // Refresh customer for final bill
+          customer = await Customer.findOne({
+            phone: userPhone
+          });
+
+          // Send Final Bill
+          await sendFinalBill(userPhone, customer);
+          await delay(600);
+
           await sendTextMessage(userPhone,
-            "*Thank you for Visiting*! 😄\n\n" +
-            "We hope to see you again soon! 🛍️"
+            "If you have any questions, feel free to ask!\n\n" +
+            "*Thank you for Visiting!* 😄"
           );
           return res.sendStatus(200);
         }
@@ -465,7 +460,7 @@ PAYMENT:
 RETURN POLICY:
 - Return only if product is damaged
 - Opening parcel video is compulsory for return
-- no return and refund without opening parcel video 
+- No return and refund without opening parcel video
 - Exchange is not available
 - Nothing is free
 
@@ -479,71 +474,69 @@ Guide them step by step:
 1. They select size (size buttons sent automatically)
 2. They see collection photos (sent automatically)
 3. They send product code like TS01
-4. You confirm: "Nice Choice! You selected TS01 Red. How many do you want?"
-5. They give quantity
-6. Ask if they want more T-Shirts
-7. When done, system sends bill automatically
-8. Ask payment method
-9. After payment, ask for delivery address
-10. After address, confirm order
+4. You confirm their selection and ask quantity
+5. Ask if they want more T-Shirts
+6. When done, system sends Purchase Bill automatically
+7. Customer selects payment method
+8. After payment confirmed, system asks for delivery address
+9. After address, customer confirms order
+10. System sends Final Bill automatically
 
 SITUATION 2 — CUSTOMER WANTS TO ADD MORE T-SHIRTS:
 If customer says "I want to add one more" or "add TS02 also":
 - Say "Sure! Send the code of the T-Shirt you want to add!"
 - After they send code, system adds it to cart automatically
 - Then ask quantity
-- Then show updated bill
+- Then system sends updated Purchase Bill
 
 SITUATION 3 — CUSTOMER WANTS TO REMOVE A T-SHIRT:
 If customer says "remove TS01" or "I don't want TS01":
-- Say "Okay, I have removed TS01 from your order."
+- Say "Okay! I have removed TS01 from your order."
 - Use tag: REMOVE_ITEM:[code] at end of reply
-- System will remove it from cart
-- Then show updated bill
+- System will remove it and show updated bill
 
 SITUATION 4 — CUSTOMER WANTS TO CHANGE QUANTITY:
 If customer says "change TS01 quantity to 3":
 - Say "Sure! Updated TS01 quantity to 3."
 - Use tag: UPDATE_QTY:[code]:[new_qty] at end of reply
-- System updates cart
-- Then show updated bill
+- System updates cart and shows updated bill
 
 SITUATION 5 — CUSTOMER ASKS ABOUT SIZE:
 - Share size chart
-- Then remind them: "You selected size [their selected size]"
-- If they want to change size, note it and update
+- Then remind: "You selected size [their selected size]"
+- If they want to change size, use tag: SEND_SIZE_BUTTONS
 
-SITUATION 6 — CUSTOMER ASKS FOR BILL:
-- Always send bill in the exact format below
-- Never skip or change the bill format
+SITUATION 6 — CUSTOMER ASKS TO SEE COLLECTION OR PRODUCTS:
+- In any tone, if customer asks to see products, photos,
+  collection, T-shirts — use tag: SEND_SIZE_BUTTONS
+- System will send size selection buttons automatically
 
 SITUATION 7 — CUSTOMER CONFUSED OR STUCK:
 - Gently guide them back to where they were
-- Example: "No problem! You were selecting T-Shirts. Want to continue?"
+- "No problem! You were selecting T-Shirts. Want to continue?"
 
 SITUATION 8 — CUSTOMER IS RUDE:
 - Stay calm and professional always
-- Example: "I understand your concern. Let me help you!"
+- "I understand your concern. Let me help you!"
 
 SITUATION 9 — AFTER ORDER IS CONFIRMED (Support Mode):
-- keep short formal replies
+Switch to support mode. Do NOT push sales.
 - Parcel not received → "Your parcel will arrive in 5-7 days. Please wait!"
 - Want to track → "Let me check. Your order is on the way!"
 - Damaged product → "I am really sorry! Please send us the opening parcel video for confirmation."
 - Any complaint → Listen first, apologize, then guide next step
 - Keep replies calm, helpful and short
-- close support mode when parcel received
 
-SITUATION 10 — CUSTOMER WANTS NEW ORDER AFTER PREVIOUS OR IN SUPPORT MODE:
+SITUATION 10 — CUSTOMER WANTS NEW ORDER:
 - Say "Happy to help with a new order!"
-- Guide from size selection again
-- Previous order is separate
+- Use tag: SEND_SIZE_BUTTONS
+- System will restart selection flow
 
 ━━━━━━━━━━━━━
-BILL FORMAT — USE THIS EVERY TIME, EXACTLY:
+PURCHASE BILL FORMAT — Send BEFORE payment:
 ━━━━━━━━━━━━━
 
-🧾 *Your Order Bill:*
+🧾 *Purchase Bill:*
 ─────────────────
 
 *T-Shirt 1:*
@@ -564,42 +557,40 @@ Price    : ₹[price]
 
 ─────────────────
 Total Price   : ₹[total without shipping]
-Shipping Cost : ₹[99 or FREE]
+Shipping Cost : [₹99 or FREE 🎉]
 ─────────────────
 *Grand Total  : ₹[final amount]*
 ─────────────────
 
-━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━
 IMPORTANT TAGS — ADD AT END OF REPLY ONLY:
 Customer will NEVER see these tags.
-System reads them automatically.
-━━━━━━━━━━━━━━━━
+━━━━━━━━━━━━━
 
 REMOVE_ITEM:[code]
-→ Use when customer wants to remove a T-Shirt
+→ Remove a T-Shirt from cart
 
 UPDATE_QTY:[code]:[new_quantity]
-→ Use when customer wants to change quantity
+→ Change quantity of a T-Shirt
 
-SEND_COLLECTION
-→ Use when customer asks to see products/photos/collection
+SEND_SIZE_BUTTONS
+→ Send size selection buttons to customer
 
-Example reply with tag:
-"Okay! I have removed TS01 from your cart. Here is your updated bill: [bill]
-REMOVE_ITEM:TS01"
-
-━━━━━━━━━━━
+━━━━━━━━━━━━━
 STRICT RULES:
-━━━━━━━━━━━
+━━━━━━━━━━━━━
+- NEVER trigger bill by just words in message
 - NEVER make up product codes or prices
 - NEVER promise free things
 - NEVER discuss competitors
-- ALWAYS use bill format exactly
 - ALWAYS maintain gaps between lines
-- For casual replies, use only product CODE not full details
-- Full product details only during selection confirmation and in bill
-- in support mode End chat gracefully: "If you have any questions, feel free to ask !
-*Thank you for Visiting* 😄"`;
+- For casual replies, use only product CODE
+- Full product details only during selection and in bill
+- Name and address must always be in English
+- After order confirmed do NOT push more sales
+- End support chat: "If you have any questions, feel free to ask!
+
+*Thank you for Visiting!* 😄"`;
 
       const recentHistory =
         customer.session.conversationHistory || [];
@@ -652,19 +643,16 @@ STRICT RULES:
         console.log(`Updated ${updateCode} qty to ${newQty}`);
       }
 
-      // Parse SEND_COLLECTION tag
-      if (aiReply.includes('SEND_COLLECTION')) {
-        const currentSize =
-          customer.session.selectedSize || 'M';
-        await sendAllProductImages(
-          userPhone, currentSize
-        );
+      // Parse SEND_SIZE_BUTTONS tag
+      if (aiReply.includes('SEND_SIZE_BUTTONS')) {
+        await sendSizeButtons(userPhone);
       }
 
       // Clean all tags from reply
       const cleanReply = aiReply
         .replace(/REMOVE_ITEM:\w+/gi, '')
         .replace(/UPDATE_QTY:\w+:\d+/gi, '')
+        .replace(/SEND_SIZE_BUTTONS/gi, '')
         .replace(/SEND_COLLECTION/gi, '')
         .replace(/update\w+:[^\n]*/gi, '')
         .trim();
@@ -681,7 +669,9 @@ STRICT RULES:
         'session.conversationHistory': trimmedHistory
       });
 
-      await sendTextMessage(userPhone, cleanReply);
+      if (cleanReply.length > 0) {
+        await sendTextMessage(userPhone, cleanReply);
+      }
     }
 
     // ── IMAGE MESSAGE HANDLER ──
@@ -729,9 +719,17 @@ async function sendWelcomeMessage(to) {
   );
 
   await delay(500);
+  await sendSizeButtons(to);
 
+  await updateCustomerSession(to, {
+    'session.stage': 'browsing'
+  });
+}
+
+// SEND SIZE BUTTONS — reusable everywhere
+async function sendSizeButtons(to) {
   try {
-    // First 3 size buttons
+    // First 3 sizes
     await axios.post(
       `https://graph.facebook.com/v18.0/${process.env.PHONE_NUMBER_ID}/messages`,
       {
@@ -771,7 +769,7 @@ async function sendWelcomeMessage(to) {
 
     await delay(500);
 
-    // XL and XXL buttons
+    // XL and XXL
     await axios.post(
       `https://graph.facebook.com/v18.0/${process.env.PHONE_NUMBER_ID}/messages`,
       {
@@ -805,12 +803,8 @@ async function sendWelcomeMessage(to) {
       }
     );
 
-    await updateCustomerSession(to, {
-      'session.stage': 'browsing'
-    });
-
   } catch (error) {
-    console.error('Welcome button error:', error.message);
+    console.error('Size button error:', error.message);
   }
 }
 
@@ -841,11 +835,16 @@ async function sendAllProductImages(to, size) {
   );
 }
 
-// BUILD BILL TEXT — used everywhere consistently
+// BUILD BILL TEXT — base function
 function buildBillText(cart, orderTotal,
-  discountedTotal, discount, shippingCost, grandTotal) {
+  discountedTotal, discount, shippingCost,
+  grandTotal, billType, confirmDateTime) {
 
-  let bill = "🧾 *Your Order Bill:*\n";
+  const title = billType === 'final'
+    ? "🧾 *Final Bill:*"
+    : "🧾 *Purchase Bill:*";
+
+  let bill = `${title}\n`;
   bill += "─────────────────\n\n";
 
   cart.forEach((item, index) => {
@@ -874,14 +873,19 @@ function buildBillText(cart, orderTotal,
   bill += `*Grand Total  : ₹${grandTotal.toFixed(0)}*\n`;
   bill += `─────────────────`;
 
+  // Add confirmation date/time for Final Bill only
+  if (billType === 'final' && confirmDateTime) {
+    bill += `\n\n`;
+    bill += `─────────────────\n`;
+    bill += `Order Confirmed : ${confirmDateTime}\n`;
+    bill += `─────────────────`;
+  }
+
   return bill;
 }
 
-// SEND BILL MESSAGE — called anytime bill needed
-async function sendBillMessage(phone, customer) {
-  const cart = customer.session.cart || [];
-  if (cart.length === 0) return;
-
+// CALCULATE CART TOTALS
+function calculateTotals(cart) {
   let orderTotal = 0;
   cart.forEach(item => {
     orderTotal += item.totalPrice || item.pricePerItem;
@@ -891,46 +895,28 @@ async function sendBillMessage(phone, customer) {
   if (cart.length === 2) discount = orderTotal * 0.10;
   if (cart.length >= 3) discount = orderTotal * 0.20;
   const discountedTotal = orderTotal - discount;
-
-  const shippingCost =
-    customer.session.deliveryCharge !== undefined
-      ? customer.session.deliveryCharge
-      : discountedTotal >= 999 ? 0 : 99;
-
+  const shippingCost = discountedTotal >= 999 ? 0 : 99;
   const grandTotal = discountedTotal + shippingCost;
 
-  const bill = buildBillText(
-    cart, orderTotal, discountedTotal,
-    discount, shippingCost, grandTotal
-  );
-
-  await sendTextMessage(phone, bill);
+  return { orderTotal, discount, discountedTotal, shippingCost, grandTotal };
 }
 
-// SEND FINAL BILL + PAYMENT BUTTONS
-async function sendFinalBill(phone, customer) {
+// SEND PURCHASE BILL — before payment
+async function sendPurchaseBill(phone, customer) {
   const cart = customer.session.cart || [];
 
   if (cart.length === 0) {
     await sendTextMessage(phone,
-      "No items in cart. Please select a T-Shirt first!"
+      "No items selected yet.\n\n" +
+      "Please select a T-Shirt first!"
     );
     return;
   }
 
-  // Calculate totals
-  let orderTotal = 0;
-  cart.forEach(item => {
-    orderTotal += item.totalPrice || item.pricePerItem;
-  });
-
-  let discount = 0;
-  if (cart.length === 2) discount = orderTotal * 0.10;
-  if (cart.length >= 3) discount = orderTotal * 0.20;
-  const discountedTotal = orderTotal - discount;
-
-  let shippingCost = discountedTotal >= 999 ? 0 : 99;
-  const grandTotal = discountedTotal + shippingCost;
+  const {
+    orderTotal, discount, discountedTotal,
+    shippingCost, grandTotal
+  } = calculateTotals(cart);
 
   // Save totals to DB
   await updateCustomerSession(phone, {
@@ -940,10 +926,10 @@ async function sendFinalBill(phone, customer) {
     'session.stage': 'confirmed'
   });
 
-  // Build and send bill
   const bill = buildBillText(
     cart, orderTotal, discountedTotal,
-    discount, shippingCost, grandTotal
+    discount, shippingCost, grandTotal,
+    'purchase', null
   );
 
   await sendTextMessage(phone, bill);
@@ -994,18 +980,51 @@ async function sendFinalBill(phone, customer) {
   }
 }
 
+// SEND FINAL BILL — after order confirmed
+async function sendFinalBill(phone, customer) {
+  const cart = customer.session.cart || [];
+
+  if (cart.length === 0) return;
+
+  const {
+    orderTotal, discount, discountedTotal,
+    shippingCost, grandTotal
+  } = calculateTotals(cart);
+
+  // Get current date and time in India format
+  const now = new Date();
+  const confirmDateTime = now.toLocaleString('en-IN', {
+    timeZone: 'Asia/Kolkata',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: true
+  });
+
+  const bill = buildBillText(
+    cart, orderTotal, discountedTotal,
+    discount, shippingCost, grandTotal,
+    'final', confirmDateTime
+  );
+
+  await sendTextMessage(phone, bill);
+}
+
 // SEND ADDRESS REQUEST
 async function sendAddressRequest(phone) {
   await sendTextMessage(phone,
-    "📦 Please send your *Shipping Address* in this format:\n\n" +
-    "NAME -\n" +
-    "HOUSE NO -\n" +
-    "ADDRESS -\n" +
-    "LANDMARK -\n" +
-    "CITY -\n" +
-    "PINCODE -\n" +
-    "DISTRICT -\n" +
-    "STATE -\n" +
+    "📦 Please send your *Shipping Address*\n" +
+    "in this format (in English only):\n\n" +
+    "NAME -\n\n" +
+    "HOUSE NO -\n\n" +
+    "ADDRESS -\n\n" +
+    "LANDMARK -\n\n" +
+    "CITY -\n\n" +
+    "PINCODE -\n\n" +
+    "DISTRICT -\n\n" +
+    "STATE -\n\n" +
     "PHONE NO -"
   );
 }
