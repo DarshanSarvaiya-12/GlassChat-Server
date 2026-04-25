@@ -236,7 +236,7 @@ app.post('/webhook', async (req, res) => {
           `Code   : *${code}*\n\n` +
           `Colour : *${product.color}*\n\n` +
           `Price  : *₹${product.price}*\n\n` +
-          `How many *${code}* T-Shirt do you want to buy?`
+          `*How many ${code}* T-Shirt do you want to buy?`
         );
 
         return res.sendStatus(200);
