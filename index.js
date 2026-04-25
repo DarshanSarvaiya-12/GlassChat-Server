@@ -662,8 +662,8 @@ STRICT RULES:
         parts: [{ text: cleanReply }]
       });
 
-      // Keep last 50 messages = 25 exchanges
-      const trimmedHistory = recentHistory.slice(-50);
+      // Keep last 4 messages = 2 exchanges
+      const trimmedHistory = recentHistory.slice(-4);
 
       await updateCustomerSession(userPhone, {
         'session.conversationHistory': trimmedHistory
