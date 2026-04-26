@@ -1223,7 +1223,7 @@ async function getGroqReply(history, systemPrompt) {
         model: 'llama-3.3-70b-versatile',
         messages: messages,
         max_tokens: 500,
-        temperature: 0.7
+        temperature: 0.5
       },
       {
         headers: {
