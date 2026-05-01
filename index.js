@@ -187,21 +187,6 @@ app.post('/webhook', async (req, res) => {
 
       const lowerText = userText.toLowerCase();
 
-// ── COLLECTION TRIGGER ──
-      if (lowerText === 'send me collection') {
-        await updateCustomerSession(userPhone, {
-          'session.cart': [],
-          'session.selectedSize': null,
-          'session.pendingCode': null,
-          'session.stage': 'browsing',
-          'session.paymentMethod': null,
-          'session.orderTotal': 0,
-          'session.grandTotal': 0
-        });
-        await sendSizeButtons(userPhone);
-        return res.sendStatus(200);
-      }
-      
       // ── SIZE CHART REQUEST ──
       if (lowerText.includes('size in number') ||
         lowerText.includes('size chart') ||
@@ -524,9 +509,9 @@ SITUATION 5 — CUSTOMER ASKS ABOUT SIZE:
 - If they want to change size, use tag: SEND_SIZE_BUTTONS
 
 SITUATION 6 — CUSTOMER ASKS TO SEE COLLECTION OR PRODUCTS:
-- If customer asks for collection, products, photos or
-  wants to place a new order in any tone — say exactly:
-  "To see our collection, Type: *Send Me Collection*"
+- In any tone, if customer asks to see products, photos,
+  collection, T-shirts — use tag: SEND_SIZE_BUTTONS
+- System will send size selection buttons automatically
 
 SITUATION 7 — CUSTOMER CONFUSED OR STUCK:
 - Gently guide them back to where they were
@@ -545,7 +530,7 @@ SITUATION 9 — AFTER ORDER IS CONFIRMED (Support Mode):
 
 SITUATION 10 — CUSTOMER WANTS NEW ORDER:
 - Say "Happy to help with a new order!"
-- To place new order type *'Send Me Collection'*
+- Use tag: SEND_SIZE_BUTTONS
 - System will restart selection flow
 
 ━━━━━━━━━━━━━
@@ -658,10 +643,16 @@ STRICT RULES:
         console.log(`Updated ${updateCode} qty to ${newQty}`);
       }
 
+      // Parse SEND_SIZE_BUTTONS tag
+      if (aiReply.includes('SEND_SIZE_BUTTONS')) {
+        await sendSizeButtons(userPhone);
+      }
+
       // Clean all tags from reply
       const cleanReply = aiReply
         .replace(/REMOVE_ITEM:\w+/gi, '')
         .replace(/UPDATE_QTY:\w+:\d+/gi, '')
+        .replace(/SEND_SIZE_BUTTONS/gi, '')
         .replace(/SEND_COLLECTION/gi, '')
         .replace(/update\w+:[^\n]*/gi, '')
         .trim();
