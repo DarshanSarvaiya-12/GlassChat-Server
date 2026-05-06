@@ -499,7 +499,7 @@ WHAT SYSTEM ALREADY DID: ${stageInfo}
 
 ━━━━━━━━━━━━━━
 YOUR LANGUAGE RULE:
-Speak simple English by default.
+Use very simple talking English by default.
 If customer uses any other language — 
 switch to that language immediately
 and stay in that language.
